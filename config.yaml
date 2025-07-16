@@ -1,0 +1,38 @@
+experiment_name: "JND_Part1"
+save_path: "JND - Part 1"
+resume_path: "-"
+dataset_dir: "/kaggle/input/humans-faces/Humans"
+image_size: 256
+batch_size: 8
+num_epochs: 50
+num_images: 7000
+train_split_ratio: 0.8
+
+# Loss Weights
+lpips_weight: 10.0
+mse_weight: 1.0
+
+# JND Weighting Settings
+use_jnd_weighting: true
+kernel_size: 16
+critical_point_ratio: 0.15
+jnd_weight_multiplier: 5.0
+
+
+# SSIM Wighting Settings
+use_ssim_weighting: true
+ssim_threshold: 0.7
+ssim_weight_multiplier: 5.0
+
+# Face Weighting Settings
+use_face_weighting: true
+
+# Pretrained model
+pretrained_vae: "EPFL-VILAB/flextok_vae_c8"
+
+# Device
+device: "cuda"
+
+#Inference :  (Hi Manushree, Some variables for this are also loaded from the above variables, so please check it up!)
+model_path: "/kaggle/working/progressive_unfreezing_vae_lpips_100/phase_1_best/model"
+image_path: "/kaggle/input/custom-images-1/1000_F_128334454_D9RvJn8RDG17P7wPPmv6qHnChR9IcPif.jpg"
