@@ -1,0 +1,29 @@
+# Upstream clones -- vendored by setup, not part of this repo. They carry their
+# own .git, so committing them would create broken gitlinks. Re-create with:
+#   git clone https://github.com/CompVis/latent-diffusion.git
+#   git clone https://github.com/CompVis/taming-transformers.git
+#   git clone https://github.com/openai/CLIP.git
+/latent-diffusion/
+/taming-transformers/
+/CLIP/
+
+# Built by setup_env.sh (~4 GB)
+/venv_ldm/
+/venv_ldm.stale.*/
+
+# Training output and weights (~16 GB)
+/logs/
+/models/
+/recon_compare/
+/setup_logs/
+
+# Regenerate with scripts/make_filelists.py (absolute paths, machine-specific)
+/filelists/
+
+# Keep: vae_bench_results/*.json -- small, and the actual measurements
+!/vae_bench_results/
+# taming's get_ckpt_path writes vgg.pth to a cwd-relative path at runtime
+/taming/
+
+__pycache__/
+*.egg-info/

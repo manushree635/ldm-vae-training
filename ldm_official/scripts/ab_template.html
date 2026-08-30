@@ -1,0 +1,131 @@
+<title>__TITLE__</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  color-scheme: light;
+  --ground:#EEF1EF; --surface:#FFFFFF; --surface-2:#F7F9F8; --line:#DCE3E0;
+  --ink:#131817; --ink-2:#57615F; --ink-3:#8A9491;
+  --accent:#0E6B68; --stage:#0F1312; --win:#1baf7a;
+  --shadow:0 1px 2px rgba(19,24,23,.05), 0 10px 30px -18px rgba(19,24,23,.35);
+/*__VARS__*/
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  color-scheme: dark;
+  --ground:#101413; --surface:#181D1C; --surface-2:#1E2422; --line:#2B3230;
+  --ink:#EEF3F1; --ink-2:#A3ADAA; --ink-3:#78827F;
+  --accent:#4FB3AE; --stage:#080B0A; --win:#199e70;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -18px rgba(0,0,0,.9);
+}}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#101413; --surface:#181D1C; --surface-2:#1E2422; --line:#2B3230;
+  --ink:#EEF3F1; --ink-2:#A3ADAA; --ink-3:#78827F;
+  --accent:#4FB3AE; --stage:#080B0A; --win:#199e70;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -18px rgba(0,0,0,.9);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);
+  font-family:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;font-size:15px;line-height:1.55}
+.wrap{max-width:980px;margin:0 auto;padding:36px 22px 64px;display:flex;flex-direction:column;gap:26px}
+h1{font-family:Archivo,sans-serif;font-size:clamp(25px,3.6vw,34px);font-weight:700;margin:0;letter-spacing:-.015em}
+h2{font-family:Archivo,sans-serif;font-size:13px;font-weight:600;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--accent);margin:0}
+.eyebrow{font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)}
+p{margin:0;max-width:68ch;color:var(--ink-2);font-size:14px}
+code{font-family:"IBM Plex Mono",monospace;font-size:12.5px;background:var(--surface-2);
+  border:1px solid var(--line);border-radius:5px;padding:1.5px 6px}
+header{border-bottom:1px solid var(--line);padding-bottom:20px;display:flex;flex-direction:column;gap:10px}
+section{display:flex;flex-direction:column;gap:13px}
+
+input[type=radio]{position:absolute;opacity:0;width:0;height:0;pointer-events:none}
+.bar{display:flex;flex-wrap:wrap;gap:7px}
+.bar label{font-family:"IBM Plex Mono",monospace;font-size:13px;padding:7px 14px;border-radius:7px;
+  border:1px solid var(--line);background:var(--surface);color:var(--ink-2);cursor:pointer;user-select:none;
+  transition:background .1s,color .1s,border-color .1s}
+.bar label:hover{border-color:var(--accent);color:var(--ink)}
+
+.cmp{display:flex;flex-wrap:wrap;gap:20px}
+.col{display:flex;flex-direction:column;gap:9px;width:256px}
+.col h3{font-family:"IBM Plex Mono",monospace;font-size:13.5px;font-weight:500;margin:0}
+.col .sub{font-size:11.5px;color:var(--ink-3);line-height:1.35;min-height:2.7em}
+.stage{width:256px;height:256px;background:var(--stage);border:1px solid var(--line);border-radius:9px;
+  background-repeat:no-repeat;background-position:center;background-size:256px 256px;
+  image-rendering:pixelated;box-shadow:var(--shadow)}
+.ro{font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--ink-2);min-height:1.4em}
+.ro::after{content:""}
+
+.refs{display:flex;flex-wrap:wrap;gap:20px}
+.ref{margin:0;display:flex;flex-direction:column;gap:8px;width:256px}
+.ref img{display:block;width:256px;height:256px;border:1px solid var(--line);border-radius:9px;
+  image-rendering:pixelated;background:var(--stage)}
+.ref figcaption{display:flex;flex-direction:column;gap:2px}
+.ref .n{font-family:"IBM Plex Mono",monospace;font-size:13px;font-weight:500}
+.ref .d{font-size:11.5px;color:var(--ink-3)}
+
+.scroll{overflow-x:auto;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:9px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);font-weight:500;background:var(--surface-2)}
+td.n{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
+td.w{color:var(--win);font-weight:500}
+tr:last-child td{border-bottom:0}
+.note{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:8px;padding:13px 15px;display:flex;flex-direction:column;gap:7px}
+.note p{font-size:12.5px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+/*__RULES__*/
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">__SUBJECT__ &middot; 256px &middot; 1:1 &middot; identical recipe, init and data</div>
+    <h1>__TITLE__</h1>
+    <p>Both runs train the <b>same objective</b> (L1 + 1.0&middot;LPIPS, taming VGG16), from the <b>same weights</b> (un-finetuned SD-1.5 VAE), on the <b>same 20k images and seed-42 split</b>, decoder-only with a frozen encoder. So anything that differs here is the <b>training framework</b>, not the recipe.</p>
+  </header>
+
+  <section>
+    <h2>Reference</h2>
+    <div class="refs"><!--REFS--></div>
+  </section>
+
+  <section>
+    <h2>Matched epochs &mdash; one click moves both</h2>
+    <p>Labels are epochs <i>completed</i>. LDM's <code>epoch=N.ckpt</code> is after N+1 epochs (Lightning is 0-indexed); nerc's <code>checkpoint_epoch_N</code> is after N.</p>
+    <!--RADIOS-->
+    <div class="bar" role="group" aria-label="Epochs"><!--TABS--></div>
+    <div class="cmp">
+      <div class="col">
+        <h3>CompVis/latent-diffusion</h3>
+        <div class="sub">fp32 &middot; Adam &beta;(0.5, 0.9), no decay, no clip &middot; random scale-crop augmentation</div>
+        <div class="stage s-ldm" role="img" aria-label="LDM reconstruction"></div>
+        <div class="ro r-ldm"></div>
+      </div>
+      <div class="col">
+        <h3>distillation_nerc</h3>
+        <div class="sub">fp16 AMP &middot; Adam &beta;(0.9, 0.999), wd 1e-5, clip 1.0 &middot; Resize((256,256)) squash</div>
+        <div class="stage s-nerc" role="img" aria-label="nerc reconstruction"></div>
+        <div class="ro r-nerc"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Measured</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>epochs</th><th>LDM rFID</th><th>nerc rFID</th><th>LDM PSNR*</th><th>nerc PSNR*</th></tr></thead>
+      <tbody>
+        <tr><td class="n">init</td><td class="n" colspan="2">10.481 (shared)</td><td class="n" colspan="2">__INIT_PSNR__ (shared)</td></tr>
+<!--ROWS-->
+      </tbody>
+    </table></div>
+    <p class="eyebrow" style="letter-spacing:.04em;text-transform:none">rFID: COCO val2017, n=2000, via vae_bench &mdash; identical on every subject page. *PSNR is on this image only.</p>
+  </section>
+
+  <div class="note">
+    <p><b>The pictures agree; the distributions do not.</b> At matched epochs the two trainers land within ~0.05&nbsp;dB of each other on this image, while nerc is consistently <b>0.25&ndash;0.32 better on COCO rFID</b> wherever both are measured.</p>
+    <p><b>Likeliest cause, stated as a hypothesis:</b> LDM trains on <code>min_side &times; U(0.5, 1.0)</code> random crops, nerc on full squashed images. <code>vae_bench</code> evaluates full images, so nerc's training distribution sits closer to the eval distribution. fp16-vs-fp32 and the optimiser settings are the other candidates; none of this is tested yet.</p>
+    <p><b>Both degrade from the shared 10.481 init</b>, and both do it almost entirely in the first epoch or two, then flatten.</p>
+  </div>
+</div>

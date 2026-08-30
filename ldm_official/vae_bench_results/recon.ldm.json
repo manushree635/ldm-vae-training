@@ -1,0 +1,35 @@
+{
+  "stage": "recon",
+  "provenance": {
+    "git_rev": "c109aa0",
+    "host": "scc-e04",
+    "torch": "2.7.1+cu128",
+    "cuda_device": "Quadro RTX 8000",
+    "n": 2000,
+    "size": 256,
+    "source": "/projectnb/ivc-ml/Datasets/coco/val2017",
+    "latent": "mean",
+    "decode_dtype": "fp32"
+  },
+  "small_sample_warning": "FID is biased upward at n=2000. Rows rank correctly against each other but the absolute values are not comparable to published rFID.",
+  "rows": {
+    "sd-vae": {
+      "rFID": 10.481327056884766,
+      "PSNR": 25.574073791503906,
+      "PSNR_median": 25.269437789916992,
+      "n": 2000
+    },
+    "ldm-ftema-ep000000": {
+      "rFID": 11.757820129394531,
+      "PSNR": 26.642417907714844,
+      "PSNR_median": 26.285743713378906,
+      "n": 2000
+    },
+    "ldm-ftema-ep000001": {
+      "rFID": 11.815353393554688,
+      "PSNR": 26.71221160888672,
+      "PSNR_median": 26.36050796508789,
+      "n": 2000
+    }
+  }
+}

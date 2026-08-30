@@ -1,0 +1,53 @@
+{
+  "stage": "recon",
+  "provenance": {
+    "git_rev": "c109aa0",
+    "host": "scc-e01",
+    "torch": "2.7.1+cu128",
+    "cuda_device": "NVIDIA RTX A6000",
+    "n": 2000,
+    "size": 256,
+    "source": "coco",
+    "latent": "mean",
+    "decode_dtype": "fp32"
+  },
+  "small_sample_warning": "FID is biased upward at n=2000. Rows rank correctly against each other but the absolute values are not comparable to published rFID.",
+  "rows": {
+    "sd-vae": {
+      "rFID": 10.482975006103516,
+      "PSNR": 25.574106216430664,
+      "PSNR_median": 25.269378662109375,
+      "n": 2000
+    },
+    "nercL1-10ep": {
+      "rFID": 11.847293853759766,
+      "PSNR": 26.86756134033203,
+      "PSNR_median": 26.513259887695312,
+      "n": 2000
+    },
+    "nercL1-20ep": {
+      "rFID": 11.948166847229004,
+      "PSNR": 26.89072608947754,
+      "PSNR_median": 26.52578353881836,
+      "n": 2000
+    },
+    "nercL1-30ep": {
+      "rFID": 12.035029411315918,
+      "PSNR": 26.897993087768555,
+      "PSNR_median": 26.535911560058594,
+      "n": 2000
+    },
+    "nercL1-40ep": {
+      "rFID": 11.997431755065918,
+      "PSNR": 26.90631103515625,
+      "PSNR_median": 26.546464920043945,
+      "n": 2000
+    },
+    "nercL1-50ep": {
+      "rFID": 12.11502456665039,
+      "PSNR": 26.910629272460938,
+      "PSNR_median": 26.54814910888672,
+      "n": 2000
+    }
+  }
+}

@@ -1,0 +1,73 @@
+# sd-vae-ft-mse recipe, run through CompVis/latent-diffusion's own trainer.
+#
+# Derived from latent-diffusion/configs/autoencoder/autoencoder_kl_32x32x4.yaml
+# (the kl-f8 / SD VAE config). Every value below is upstream's except the four
+# marked [ft-MSE], which are what makes this the MSE variant rather than the
+# ft-EMA/L1 one, and the data + ckpt blocks, which point at the local 20k set.
+#
+# Reference: https://huggingface.co/stabilityai/sd-vae-ft-mse
+#   "resumed from ft-EMA ... trained for another 280k steps ... with more
+#    emphasis on MSE reconstruction (MSE + 0.1 * LPIPS)", decoder-only,
+#    batch size 192, on LAION-Aesthetics + LAION-Humans.
+
+model:
+  base_learning_rate: 4.5e-6            # upstream LDM's value. NOTE: the model
+                                      # cards do NOT publish a learning rate.
+  target: ldm_ftmse.autoencoder.AutoencoderKLDecoderOnly   # [ft-MSE] decoder-only
+  params:
+    monitor: "val/rec_loss"
+    embed_dim: 4
+    ckpt_path: "/projectnb/ivc-ml/mvasu6/Perceptually-Better-VAE/ldm_official/models/sd15_vae_ldm.ckpt"   # SD-1.x kl-f8 VAE, converted to LDM keys
+    lossconfig:
+      target: ldm_ftmse.losses.LPIPSWithDiscriminatorMSE   # [ft-MSE] MSE pixel term
+      params:
+        disc_start: 50001
+        kl_weight: 0.000001
+        disc_weight: 0.5
+        perceptual_weight: 0.1          # [ft-MSE] upstream default is 1.0
+        rec_loss_type: mse              # [ft-MSE] upstream is hardcoded L1
+
+    ddconfig:                           # upstream, untouched -- this is kl-f8
+      double_z: True
+      z_channels: 4
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [ 1,2,4,4 ]  # num_down = len(ch_mult)-1
+      num_res_blocks: 2
+      attn_resolutions: [ ]
+      dropout: 0.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 12                      # upstream
+    num_workers: 4                      # upstream leaves this unset, which
+    wrap: True                          # defaults to batch_size*2 = 24 per rank
+    train:                              # (96 workers on 16 cores). Operational.
+      target: ldm_ftmse.data.FileListSRTrain
+      params:
+        size: 256                       # upstream
+        degradation: pil_nearest        # upstream
+        images_list_file: /projectnb/ivc-ml/mvasu6/Perceptually-Better-VAE/ldm_official/filelists/subset_20k/train.txt
+    validation:
+      target: ldm_ftmse.data.FileListSRValidation
+      params:
+        size: 256                       # upstream
+        degradation: pil_nearest        # upstream
+        images_list_file: /projectnb/ivc-ml/mvasu6/Perceptually-Better-VAE/ldm_official/filelists/subset_20k/val.txt
+
+lightning:
+  callbacks:
+    image_logger:
+      target: main.ImageLogger
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+
+  trainer:
+    benchmark: True
+    accumulate_grad_batches: 2          # upstream
+    max_epochs: 50                      # upstream sets none and runs forever

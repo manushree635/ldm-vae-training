@@ -1,0 +1,47 @@
+{
+  "stage": "recon",
+  "provenance": {
+    "git_rev": "c109aa0",
+    "host": "scc-e04",
+    "torch": "2.7.1+cu128",
+    "cuda_device": "Quadro RTX 8000",
+    "n": 2000,
+    "size": 256,
+    "source": "coco",
+    "latent": "mean",
+    "decode_dtype": "fp32"
+  },
+  "small_sample_warning": "FID is biased upward at n=2000. Rows rank correctly against each other but the absolute values are not comparable to published rFID.",
+  "rows": {
+    "sd-vae": {
+      "rFID": 10.481327056884766,
+      "PSNR": 25.574073791503906,
+      "PSNR_median": 25.269437789916992,
+      "n": 2000
+    },
+    "emagan-1ep-raw": {
+      "rFID": 11.755413055419922,
+      "PSNR": 26.642562866210938,
+      "PSNR_median": 26.285778045654297,
+      "n": 2000
+    },
+    "emagan-1ep-ema": {
+      "rFID": 11.770122528076172,
+      "PSNR": 26.63056755065918,
+      "PSNR_median": 26.271339416503906,
+      "n": 2000
+    },
+    "emagan-2ep-raw": {
+      "rFID": 9.982781410217285,
+      "PSNR": 25.745893478393555,
+      "PSNR_median": 25.368366241455078,
+      "n": 2000
+    },
+    "emagan-2ep-ema": {
+      "rFID": 10.004481315612793,
+      "PSNR": 25.78988265991211,
+      "PSNR_median": 25.415159225463867,
+      "n": 2000
+    }
+  }
+}

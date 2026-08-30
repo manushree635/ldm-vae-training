@@ -1,0 +1,97 @@
+<title>Red Gown A/B Viewer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  color-scheme: light;
+  --ground:#EEF1EF; --surface:#FFFFFF; --surface-2:#F7F9F8; --line:#DCE3E0;
+  --ink:#131817; --ink-2:#57615F; --ink-3:#8A9491;
+  --accent:#0E6B68; --stage:#0F1312;
+  --shadow:0 1px 2px rgba(19,24,23,.05), 0 10px 30px -18px rgba(19,24,23,.35);
+/*__VARS__*/
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  color-scheme: dark;
+  --ground:#101413; --surface:#181D1C; --surface-2:#1E2422; --line:#2B3230;
+  --ink:#EEF3F1; --ink-2:#A3ADAA; --ink-3:#78827F;
+  --accent:#4FB3AE; --stage:#080B0A;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -18px rgba(0,0,0,.9);
+}}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#101413; --surface:#181D1C; --surface-2:#1E2422; --line:#2B3230;
+  --ink:#EEF3F1; --ink-2:#A3ADAA; --ink-3:#78827F;
+  --accent:#4FB3AE; --stage:#080B0A;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -18px rgba(0,0,0,.9);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);
+  font-family:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;font-size:15px;line-height:1.55}
+.wrap{max-width:960px;margin:0 auto;padding:36px 22px 64px;display:flex;flex-direction:column;gap:26px}
+h1{font-family:Archivo,sans-serif;font-size:clamp(25px,3.6vw,34px);font-weight:700;margin:0;letter-spacing:-.015em}
+h2{font-family:Archivo,sans-serif;font-size:13px;font-weight:600;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--accent);margin:0}
+.eyebrow{font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)}
+p{margin:0;max-width:66ch;color:var(--ink-2);font-size:14px}
+code{font-family:"IBM Plex Mono",monospace;font-size:12.5px;background:var(--surface-2);
+  border:1px solid var(--line);border-radius:5px;padding:1.5px 6px}
+header{border-bottom:1px solid var(--line);padding-bottom:20px;display:flex;flex-direction:column;gap:10px}
+section{display:flex;flex-direction:column;gap:13px}
+
+input[type=radio]{position:absolute;opacity:0;width:0;height:0;pointer-events:none}
+.tabs{display:flex;flex-wrap:wrap;gap:7px}
+.tabs label{font-family:"IBM Plex Mono",monospace;font-size:12.5px;padding:6px 12px;border-radius:7px;
+  border:1px solid var(--line);background:var(--surface);color:var(--ink-2);cursor:pointer;user-select:none;
+  transition:background .1s,color .1s,border-color .1s}
+.tabs label:hover{border-color:var(--accent);color:var(--ink)}
+.tabs.tiny label{font-size:11px;padding:4px 8px;border-radius:5px}
+
+.stage{width:256px;height:256px;background:var(--stage);border:1px solid var(--line);border-radius:9px;
+  background-repeat:no-repeat;background-position:center;background-size:256px 256px;
+  image-rendering:pixelated;box-shadow:var(--shadow);flex:none}
+.readout{font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--ink-2);min-height:1.4em}
+.readout::after{content:""}
+
+.ab{display:flex;flex-direction:column;gap:12px}
+.three{display:flex;flex-wrap:wrap;gap:18px}
+.pane{display:flex;flex-direction:column;gap:8px;width:256px}
+.pane .tabs{gap:4px}
+
+.note{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:8px;padding:13px 15px;display:flex;flex-direction:column;gap:7px}
+.note p{font-size:12.5px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+/*__RULES__*/
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Second-Phase17674.jpg &middot; 256px &middot; 1:1 &middot; posterior mean &middot; fp32 decode</div>
+    <h1>Red Gown A/B Viewer</h1>
+    <p>Every reconstruction is drawn at <b>native 256px, 1:1, no scaling</b>. Preprocessing matches <code>inference.py</code>'s <code>Resize((256,256))</code>.</p>
+  </header>
+
+  <section>
+    <h2>Flicker &mdash; one stage, swap in place</h2>
+    <p>The strongest way to see small differences: nothing moves but the pixels. Click a tab, then use <b>arrow keys</b> to flick between arms without moving your eyes.</p>
+    <!--RADIOS_AB-->
+    <div class="ab">
+      <div class="tabs" role="group" aria-label="Model"><!--TABS_AB--></div>
+      <div class="stage" role="img" aria-label="reconstruction"></div>
+      <div class="readout"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Three up &mdash; side by side</h2>
+    <p>Three independent panes, each selectable. Defaults to the comparison worth making: ground truth, your plain finetune, and the official LDM run.</p>
+    <!--RADIOS_3-->
+    <div class="three"><!--PANES--></div>
+  </section>
+
+  <div class="note">
+    <p><b>PSNR is for this one image</b> and does not rank general quality &mdash; on COCO rFID these arms order almost the opposite way.</p>
+    <p><b>The two face-finetuned arms are not at comparable points.</b> <code>nerc-vgg</code> is 10 epochs from <code>sd-vae-ft-mse</code>; <code>ldm-ftema</code> is 4 epochs from the un-finetuned <code>sd-vae</code>.</p>
+  </div>
+</div>

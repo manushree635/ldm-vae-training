@@ -1,0 +1,87 @@
+<title>Red Gown Reconstruction</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  color-scheme: light;
+  --ground:#EEF1EF; --surface:#FFFFFF; --surface-2:#F7F9F8; --line:#DCE3E0;
+  --ink:#131817; --ink-2:#57615F; --ink-3:#8A9491;
+  --accent:#0E6B68; --accent-soft:#DCEBE9; --best:#1baf7a;
+  --shadow:0 1px 2px rgba(19,24,23,.05), 0 8px 24px -16px rgba(19,24,23,.25);
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  color-scheme: dark;
+  --ground:#101413; --surface:#181D1C; --surface-2:#1E2422; --line:#2B3230;
+  --ink:#EEF3F1; --ink-2:#A3ADAA; --ink-3:#78827F;
+  --accent:#4FB3AE; --accent-soft:#173330; --best:#199e70;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+}}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#101413; --surface:#181D1C; --surface-2:#1E2422; --line:#2B3230;
+  --ink:#EEF3F1; --ink-2:#A3ADAA; --ink-3:#78827F;
+  --accent:#4FB3AE; --accent-soft:#173330; --best:#199e70;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);
+  font-family:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1340px;margin:0 auto;padding:40px 24px 72px;display:flex;flex-direction:column;gap:32px}
+h1,h2,h3{font-family:Archivo,ui-sans-serif,system-ui,sans-serif;margin:0;text-wrap:balance;letter-spacing:-.015em}
+h1{font-size:clamp(27px,4vw,38px);font-weight:700;line-height:1.1}
+h2{font-size:14px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--accent)}
+.eyebrow{font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)}
+header{border-bottom:1px solid var(--line);padding-bottom:22px;display:flex;flex-direction:column;gap:12px}
+p{margin:0;max-width:66ch}
+.muted{color:var(--ink-2)} .tiny{font-size:12.5px}
+code{font-family:"IBM Plex Mono",monospace;font-size:12.5px;background:var(--surface-2);
+  border:1px solid var(--line);border-radius:5px;padding:1.5px 6px}
+section{display:flex;flex-direction:column;gap:14px}
+.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:18px}
+.cell{background:var(--surface);border:1px solid var(--line);border-radius:10px;overflow:hidden;
+  box-shadow:var(--shadow);display:flex;flex-direction:column}
+.cell.ref{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.cell img{width:100%;height:auto;display:block;image-rendering:pixelated;background:var(--surface-2)}
+.cap{padding:11px 14px 13px;display:flex;flex-direction:column;gap:3px;border-top:1px solid var(--line)}
+.cap .n{font-family:"IBM Plex Mono",monospace;font-size:14px;font-weight:500}
+.cap .d{font-size:12.5px;color:var(--ink-3);line-height:1.35}
+.cap .p{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-2);font-variant-numeric:tabular-nums;margin-top:2px}
+.cap .p b{color:var(--best);font-weight:500}
+.note{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:8px;padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+footer{border-top:1px solid var(--line);padding-top:16px;font-size:12.5px;color:var(--ink-3)}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Second-Phase17674.jpg &middot; 256px &middot; posterior mean &middot; fp32 decode</div>
+    <h1>Red Gown Reconstruction</h1>
+    <p class="muted">Every arm run through <code>vae_bench</code>'s own load and decode path &mdash; fp16 weights, fp32 decode, <code>latent_dist.mean</code>, <code>Resize</code>&rarr;<code>CenterCrop</code> &mdash; so these correspond to the rFID table rather than a separate pipeline. Dense gold embroidery on saturated red is close to a worst case for an f8 autoencoder.</p>
+  </header>
+
+  <section>
+    <h2>Full frame</h2>
+    <div class="strip"><!--FULL--></div>
+  </section>
+
+  <section>
+    <h2>Face &amp; headdress <span class="tiny muted" style="text-transform:none;letter-spacing:0;font-weight:400">&mdash; 64px crop, nearest-neighbour upscale</span></h2>
+    <div class="strip"><!--CROP_FACE--></div>
+  </section>
+
+  <section>
+    <h2>Gold embroidery <span class="tiny muted" style="text-transform:none;letter-spacing:0;font-weight:400">&mdash; the high-frequency test</span></h2>
+    <div class="strip"><!--CROP_EMB--></div>
+  </section>
+
+  <section>
+    <div class="note">
+      <p class="tiny"><b>PSNR is on this one image only</b> and does not rank general quality &mdash; the rFID table on COCO is the distributional measure, and it moves the opposite way from PSNR for every finetuned arm here.</p>
+      <p class="tiny"><b>The two finetuned-on-faces arms are not at comparable points.</b> <code>nerc-vgg</code> is 10 epochs from <code>sd-vae-ft-mse</code>; <code>ldm-ftema</code> is 4 epochs from the un-finetuned <code>sd-vae</code>. They started in different places.</p>
+    </div>
+  </section>
+
+  <footer><!--COUNT--> arms &middot; generated by scripts/build_recon_page.py &middot; no JavaScript required</footer>
+</div>
+

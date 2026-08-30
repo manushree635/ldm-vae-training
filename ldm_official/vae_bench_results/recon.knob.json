@@ -1,0 +1,95 @@
+{
+  "stage": "recon",
+  "provenance": {
+    "git_rev": "c109aa0",
+    "host": "scc-f02",
+    "torch": "2.7.1+cu128",
+    "cuda_device": "Quadro RTX 6000",
+    "n": 2000,
+    "size": 256,
+    "source": "/projectnb/ivc-ml/Datasets/coco/val2017",
+    "latent": "mean",
+    "decode_dtype": "fp32"
+  },
+  "small_sample_warning": "FID is biased upward at n=2000. Rows rank correctly against each other but the absolute values are not comparable to published rFID.",
+  "rows": {
+    "sd-vae": {
+      "rFID": 10.481327056884766,
+      "PSNR": 25.574073791503906,
+      "PSNR_median": 25.269437789916992,
+      "n": 2000
+    },
+    "sd-vae-ft-mse": {
+      "rFID": 9.505971908569336,
+      "PSNR": 26.6483211517334,
+      "PSNR_median": 26.248573303222656,
+      "n": 2000
+    },
+    "knobA-w0.1-lr1e5": {
+      "rFID": 13.788627624511719,
+      "PSNR": 27.245210647583008,
+      "PSNR_median": 26.896087646484375,
+      "n": 2000
+    },
+    "knobB-w0.1-lr3e6": {
+      "rFID": 12.647040367126465,
+      "PSNR": 27.276567459106445,
+      "PSNR_median": 26.931983947753906,
+      "n": 2000
+    },
+    "knobC-w0.004": {
+      "rFID": 31.325000762939453,
+      "PSNR": 27.542987823486328,
+      "PSNR_median": 27.213062286376953,
+      "n": 2000
+    },
+    "knobC32-w0.004-fp32": {
+      "rFID": 31.325273513793945,
+      "PSNR": 27.54368019104004,
+      "PSNR_median": 27.214096069335938,
+      "n": 2000
+    },
+    "knobD-broad100k-4ep": {
+      "rFID": 14.19437026977539,
+      "PSNR": 27.28304672241211,
+      "PSNR_median": 26.931045532226562,
+      "n": 2000
+    },
+    "knobE-ema999": {
+      "rFID": 13.784908294677734,
+      "PSNR": 27.245361328125,
+      "PSNR_median": 26.896316528320312,
+      "n": 2000
+    },
+    "knobE-ema999-EMA": {
+      "rFID": 13.596247673034668,
+      "PSNR": 27.25558853149414,
+      "PSNR_median": 26.909255981445312,
+      "n": 2000
+    },
+    "knobF-freezedec": {
+      "rFID": 12.142330169677734,
+      "PSNR": 27.161359786987305,
+      "PSNR_median": 26.805137634277344,
+      "n": 2000
+    },
+    "knobG-squarecrop": {
+      "rFID": 13.535272598266602,
+      "PSNR": 27.207820892333984,
+      "PSNR_median": 26.866790771484375,
+      "n": 2000
+    },
+    "knobH-freeze-ema": {
+      "rFID": 11.601272583007812,
+      "PSNR": 27.1074161529541,
+      "PSNR_median": 26.74095344543457,
+      "n": 2000
+    },
+    "knobH-freeze-ema-EMA": {
+      "rFID": 11.528837203979492,
+      "PSNR": 27.103553771972656,
+      "PSNR_median": 26.73729705810547,
+      "n": 2000
+    }
+  }
+}
