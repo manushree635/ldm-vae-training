@@ -1,0 +1,7 @@
+# Built by setup_env.sh
+/venv_ldm/
+/venv_ldm.stale.*/
+
+__pycache__/
+*.egg-info/
+*.pyc
