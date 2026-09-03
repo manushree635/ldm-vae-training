@@ -1,10 +1,7 @@
-# Upstream clones -- vendored by setup, not part of this repo. They carry their
-# own .git, so committing them would create broken gitlinks. Re-create with:
-#   git clone https://github.com/CompVis/latent-diffusion.git
-#   git clone https://github.com/CompVis/taming-transformers.git
+# latent-diffusion/ and taming-transformers/ are vendored in tracked (their
+# nested .git dirs were stripped so they commit as plain files, not gitlinks).
+# CLIP/ stays untracked -- not needed for VAE training. Re-create with:
 #   git clone https://github.com/openai/CLIP.git
-/latent-diffusion/
-/taming-transformers/
 /CLIP/
 
 # Built by setup_env.sh (~4 GB)
