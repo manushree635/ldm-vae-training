@@ -1,0 +1,94 @@
+# AlexNet-LPIPS control with perceptual_weight = 0.5 (upstream default is 1.0).
+#
+# One-line diff from ..._ftmse_noaug_alexlpips_20k.yaml: perceptual_weight only.
+# Same ft-mse init, no augmentation, no steerable term, AlexNet LPIPS trunk.
+#
+# MEASURED SCALE, on 8 real val faces with a blur+noise reconstruction:
+#     L1                0.0487
+#     VGG16   p_loss    0.2138   perceptual:L1 = 4.39
+#     AlexNet p_loss    0.1581   perceptual:L1 = 3.25
+#     AlexNet / VGG     0.740
+#
+# So AlexNet's perceptual term is ALREADY 26% weaker than VGG's at weight 1.0.
+# Setting 0.5 moves further the SAME way: effective pull becomes 0.5 * 0.740 =
+# 0.37x VGG's, i.e. ~2.7x weaker. This is therefore NOT the scale-compensated
+# comparison -- for that, perceptual_weight = 1.35 (= 0.2138/0.1581) would match
+# VGG's perceptual:L1 balance and isolate the trunk from its scale.
+#
+# What this run does test is sensitivity to perceptual strength on the AlexNet
+# trunk. Relevant prior: this project found LPIPS dominance load-bearing --
+# lowering the perceptual weight toward the MSE crossover blew rFID to 19.4 --
+# so halving it may well hurt, and by how much is the informative part.
+#
+# Reference points at perceptual_weight 1.0: ftnoaug (VGG) 9.117 best rFID,
+# alexlpips (AlexNet) 9.348 (stopped ep22, SIGKILL; plateaued from ~ep14).
+
+model:
+  base_learning_rate: 4.5e-6            # upstream LDM's value. NOTE: the model
+                                      # cards do NOT publish a learning rate.
+  target: ldm_ftmse.autoencoder.AutoencoderKLDecoderOnlyEMA
+  params:
+    monitor: "val/rec_loss"
+    embed_dim: 4
+    use_ema: True
+    ckpt_path: "${oc.env:LDM_ROOT}/models/ftmse_vae_ldm_with_disc.ckpt"
+    lossconfig:
+      target: ldm_ftmse.losses_alexlpips.LPIPSAlexWithDiscriminator  # VGG16 -> AlexNet trunk
+      params:                           # upstream values; perceptual_weight
+        disc_start: 200        # ~1 epoch; safe only because the
+                               # discriminator is pretrained (kl-f8, step 246803)
+        kl_weight: 0.000001
+        disc_weight: 0.5
+        perceptual_weight: 0.5          # upstream default is 1.0
+
+    ddconfig:                           # upstream, untouched -- this is kl-f8
+      double_z: True
+      z_channels: 4
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [ 1,2,4,4 ]  # num_down = len(ch_mult)-1
+      num_res_blocks: 2
+      attn_resolutions: [ ]
+      dropout: 0.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 12                      # upstream
+    num_workers: 4                      # upstream leaves this unset, which
+    wrap: True                          # defaults to batch_size*2 = 24 per rank
+    train:                              # (96 workers on 16 cores). Operational.
+      target: ldm_ftmse.data.FileListSRTrain
+      params:
+        size: 256                       # upstream
+        degradation: pil_nearest        # upstream
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/subset_20k_rcrop/train.txt
+        min_crop_f: 1.0                  # augmentation OFF -- identical to
+        max_crop_f: 1.0                  # what data_teacher forces
+        random_crop: False
+    validation:
+      target: ldm_ftmse.data.FileListSRValidation
+      params:
+        size: 256                       # upstream
+        degradation: pil_nearest        # upstream
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/subset_20k_rcrop/val.txt
+        min_crop_f: 1.0                  # augmentation OFF -- identical to
+        max_crop_f: 1.0                  # what data_teacher forces
+        random_crop: False
+
+lightning:
+  callbacks:
+    image_logger:
+      target: main.ImageLogger
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+
+  trainer:
+    benchmark: True
+    accumulate_grad_batches: 2          # upstream
+    max_epochs: 25                      # the plain run showed everything happens
+                                        # early; 25 is ample to see the effect

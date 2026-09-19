@@ -1,0 +1,129 @@
+# STAGE 2 of the stage-wise recipe: DECODER-ONLY finetune on top of the stage-1 encoder (probe G11: whole encoder +
+# decoder trained with band-balanced MSE at lr 1e-4, anchor 0.1 -> bench L1 corr2 0.626, latent drift 0.063).
+# Stage 1 maximises what z holds (blur allowed); stage 2 renders it sharply. Losses = fe_magbb's exactly: magnitude
+# steerable 1.0 (equal 22 bands, teacher 512) + band-balanced MSE 0.25 (teacher 512 @512, no hi) + L1/LPIPS/GAN vs GT 256.
+# NO latents_file: the cache holds ft-mse's latents, which are WRONG for the G11 encoder.
+# Weights: models/stage1_G11_ldm_with_disc.ckpt (scripts/merge_diffusers_vae_into_ldm_ckpt.py).
+model:
+  base_learning_rate: 4.5e-6            # upstream LDM's value; the model cards publish none
+  target: ldm_ftmse.autoencoder_steerable.AutoencoderKLSteerableEMA   # DECODER-ONLY: encoder frozen at stage 1's
+  params:
+    monitor: "val/rec_loss"             # NOTE: anti-correlated with rFID on GAN runs.
+    embed_dim: 4                        # Select checkpoints by rFID, not by this.
+    use_ema: True
+    teacher_key: teacher
+    ckpt_path: "${oc.env:LDM_ROOT}/models/stage1_G11_ldm_with_disc.ckpt"   # stage 1 = probe G11 (encoder+decoder, bandbal MSE, lr 1e-4, anchor 0.1) + ft-mse discriminator
+    lossconfig:
+      target: ldm_ftmse.losses_bandbal.LPIPSWithDiscriminatorBandBal
+      params:
+        disc_start: 400                 # = 200 under PL 1.4.2: venv_ldm2 is Lightning 1.9.5 and counts
+                                        # BOTH optimizers in global_step. Safe only because the
+        kl_weight: 0.000001             # discriminator is pretrained (kl-f8, step 246803)
+        disc_weight: 0.5
+        disc_skip_recon_loss: True      # BIT-EXACT speed flag
+        # --- steerable distillation, the only new term ---------------------------
+        # steerable_normalize: nll_units multiplies the mean-reduced rel-L1 by
+        # 3*256*256 = 196608, putting it in the same per-image-sum units as nll_loss.
+        # Without it, weight 0.5 against a total of ~29,000 is ~1e-6 of the objective
+        # and the run would be indistinguishable from the control.
+        steerable_weight: 1.0   # extends the equal-band ladder below w2eq (2.0), w5eq, w10eq
+        steerable_normalize: nll_units
+        steerable_height: 5             # +2 residuals -> SCFpyr height 7 -> 22 bands @512
+        steerable_order: 3              # nbands = order+1 = 4 orientations
+        steerable_match_mode: upsample  # student 256 -> 512; keeps all 22 bands alive
+        steerable_color_mode: luminance
+        steerable_complex: True
+        steerable_complex_metric: magnitude
+        steerable_eps: 1.0e-8
+        steerable_log_bands: True       # watch residual_highpass / band_0_*: they sit
+                                        # above the student's Nyquist and may stay pinned
+        steerable_band_weights:         # graded diffweight ramp, level 0 = FINEST
+          "('residual_highpass',)": 1.0
+          "('band', 0, 0)": 1.0
+          "('band', 0, 1)": 1.0
+          "('band', 0, 2)": 1.0
+          "('band', 0, 3)": 1.0
+          "('band', 1, 0)": 1.0
+          "('band', 1, 1)": 1.0
+          "('band', 1, 2)": 1.0
+          "('band', 1, 3)": 1.0
+          "('band', 2, 0)": 1.0
+          "('band', 2, 1)": 1.0
+          "('band', 2, 2)": 1.0
+          "('band', 2, 3)": 1.0
+          "('band', 3, 0)": 1.0
+          "('band', 3, 1)": 1.0
+          "('band', 3, 2)": 1.0
+          "('band', 3, 3)": 1.0
+          "('band', 4, 0)": 1.0
+          "('band', 4, 1)": 1.0
+          "('band', 4, 2)": 1.0
+          "('band', 4, 3)": 1.0
+          "('residual_lowpass',)": 1.0
+        # --- band-balanced MSE on top, at a SMALL weight: placement, while magnitude strpy holds the energy ---
+        bandbal_weight: 0.25            # 1/4 of the bb-only arms (share ~0.6 there -> blur); magnitude strpy is the energy target
+        bandbal_target: teacher               # the 512 teacher recon
+        bandbal_geometry: 512                 # 256 recon UPSAMPLED to 512 (the steerable term's bicubic _up), vs teacher 512
+        bandbal_levels: [lo, L4, L3, L2, L1, L0]   # hi (182-362 cpi) dropped: wholly above the 256 student's Nyquist,
+                                              # so its term is unreachable and only asks for invented energy
+        bandbal_normalize: nll_units
+        bandbal_energies: null          # measured on the first 16 batches of the target, DDP-averaged, frozen
+
+    ddconfig:                           # upstream, untouched -- this is kl-f8
+      double_z: True
+      z_channels: 4
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [ 1,2,4,4 ]
+      num_res_blocks: 2
+      attn_resolutions: [ ]
+      dropout: 0.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 24                      # x 2 GPU x accum 2 -> global 96, as the control; 24/GPU fits RTX PRO 6000 and H200
+    num_workers: 12
+    wrap: True
+    train:
+      target: ldm_ftmse.data_teacher.FileListSRTeacherTrain
+      params:                           # min_crop_f/max_crop_f/random_crop are forced by
+        size: 256                       # the class -- deliberately absent so the YAML
+        degradation: pil_nearest        # cannot break alignment
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/subset_20k_rcrop/train.txt
+        teacher_dir: ${oc.env:LDM_DATA}/subset_20k_rcrop_teacher_recons_512_png
+        teacher_size: 512
+    validation:
+      target: ldm_ftmse.data_teacher.FileListSRTeacherValidation
+      params:
+        size: 256
+        degradation: pil_nearest
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/subset_20k_rcrop/val.txt
+        teacher_dir: ${oc.env:LDM_DATA}/subset_20k_rcrop_teacher_recons_512_png
+        teacher_size: 512
+
+lightning:
+  callbacks:
+    image_logger:
+      target: main.ImageLogger
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+    periodic_ckpt:
+      target: ldm_ftmse.periodic_checkpoint.PeriodicCheckpoint
+      params:
+        dirpath: checkpoints_periodic
+        epochs: []
+        every_n_epochs: 5
+        max_keep: 0
+        save_weights_only: false
+        save_on_train_end: true
+
+  trainer:
+    benchmark: True
+    precision: bf16
+    accumulate_grad_batches: 2          # 24 x 2 GPU x 2 = 96; global_step/epoch unchanged, so disc_start 400 still = ~1 epoch
+    max_epochs: 25

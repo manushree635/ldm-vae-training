@@ -1,0 +1,40 @@
+# Weights & Biases logging — paste this `lightning:` block into any config.
+#
+# main.py already builds a WandbLogger if `lightning.logger` asks for one, so the
+# logger half needs no code. The image half does: upstream's ImageLogger maps
+# only TestTubeLogger to a handler, so with wandb selected the reconstruction
+# grids fall through to a no-op and land on disk only. ImageLoggerWandb adds the
+# missing handler and inherits everything else.
+#
+# FixedImageReconLogger is the single-image panel: it reconstructs ONE pinned
+# image on a fixed cadence, so the wandb view reads as a time series instead of
+# a different picture every step. Preprocessing mirrors ImageNetSR at
+# min_crop_f = max_crop_f = 1.0 (centre-crop to the short side, resize, x/127.5-1),
+# and if the module has ema_scope it logs the EMA reconstruction alongside.
+#
+# Requires WANDB_API_KEY in the environment, or `wandb login` beforehand. Add
+# WANDB_MODE=offline to the job script to buffer runs and sync later.
+
+lightning:
+  logger:
+    target: pytorch_lightning.loggers.WandbLogger
+    params:
+      project: vae-knowledge-distillation      # matches distillation_nerc
+      # name / id / save_dir are filled in by main.py from --name and --logdir
+      tags: ["ldm", "512-256", "steerable", "teacher-student"]
+
+  callbacks:
+    image_logger:
+      target: ldm_ftmse.wandb_logging.ImageLoggerWandb   # was main.ImageLogger
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+
+    fixed_image:
+      target: ldm_ftmse.wandb_logging.FixedImageReconLogger
+      params:
+        image_path: ${oc.env:LDM_ROOT}/assets/fixed_recon_image.jpg
+        every_n_steps: 200
+        size: 256
+        log_key: gown

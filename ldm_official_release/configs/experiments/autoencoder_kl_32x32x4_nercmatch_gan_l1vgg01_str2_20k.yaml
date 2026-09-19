@@ -1,0 +1,160 @@
+# nerc-match + GAN, loss-weight sweep: L1 + VGG-LPIPS 0.1, steerable 2.0.
+# nmgJ: nmgF (L1 + VGG 0.1 + str 0.5, GAN, rFID 9.55) with steerable_weight 2.0 only.
+# nmgF: the VGG-0.1 twin of nmgB (VGG 1.0, rFID 9.08) and the L1 twin of nmgD (MSE + VGG 0.1, rFID 12.32).
+# One of five arms that differ from ..._nercmatch_gan_20k.yaml ONLY in pixel_loss /
+# perceptual_net / perceptual_weight / steerable_weight (and disc_start, doubled for Lightning 1.9.5).
+# Everything else -- nerc data + teacher, mean-reduced nll, no KL, lr 1e-5, fp16, global batch 384
+# (12 x 2 GPUs x 16), 50 epochs, graded bands, GAN from epoch 2 -- is nerc-match's, unchanged.
+#
+# The nerc-match run (autoencoder_kl_32x32x4_nercmatch_20k.yaml) with ldm_official's GAN on
+# from epoch 2. Loss, data, batch, precision and schedule are nerc-match's:
+#   1.0 x MSE + 0.3 x AlexNet-LPIPS + 0.5 x steerable (graded, all bands), mean-reduced, no KL,
+#   lr 1e-5, fp16, global batch 384 (12 x 2 GPUs x 16), 50 epochs, nerc's split + teacher recons
+# GAN = ldm_official's (AutoencoderKLSteerableEMA): pretrained kl-f8 critic, hinge, disc_weight 0.5,
+#   adaptive weight on nll (MSE + LPIPS), critic lr = lr, Adam betas (0.5, 0.9) for BOTH
+#   optimisers, disc_start 100 steps = start of epoch 2.
+# Per request, NO weight decay and NO gradient clipping (nerc-match had 1e-5 / 1.0).
+# Adaptive weight is upstream's verbatim: under fp16 it measured 98.4% of fp32 on a shared
+#   latent sample (smoke 7526177), so no fp16 guard is used.
+
+model:
+  base_learning_rate: 1.0e-5            # nerc training_config.learning_rate (unscaled)
+  target: ldm_ftmse.autoencoder_steerable.AutoencoderKLSteerableEMA   # ldm_official GAN class: 2 optimisers
+  params:
+    monitor: "val/rec_loss"             # NOTE: anti-correlated with rFID on GAN runs.
+    embed_dim: 4                        # Select checkpoints by rFID, not by this.
+    use_ema: True                       # eval-only extra: nerc has no EMA -> compare RAW
+    teacher_key: teacher
+    ckpt_path: "${oc.env:LDM_ROOT}/models/ftmse_vae_ldm_with_disc.ckpt"
+    lossconfig:
+      target: ldm_ftmse.losses_steerable.LPIPSWithDiscriminatorSteerable
+      params:
+        disc_start: 200                  # = nercmatch_gan's 100 under PL 1.4.2. venv_ldm2/ldm3 are
+                                         # Lightning 1.9.5 and count BOTH optimizers in global_step,
+                                         # so the threshold doubles to keep the GAN starting at epoch 2.
+        kl_weight: 0.0                  # nerc use_kl_loss: false
+        disc_factor: 1.0                # GAN ON, ldm_official's: pretrained kl-f8 critic (from ckpt_path),
+        disc_weight: 0.5                # hinge, adaptive d_weight = |grad nll|/|grad g| x 0.5, critic lr = lr
+        # --- nerc-style reconstruction: 1 x MSE + 0.1 x LPIPS, MEAN-reduced -------
+        pixel_loss: l1                  # L1, upstream's pixel term
+        pixelloss_weight: 1.0
+        perceptual_weight: 0.1
+        perceptual_net: vgg
+        nll_reduction: mean             # mean over C*H*W, not upstream's per-image sum
+        # --- steerable distillation, the only new term ---------------------------
+        # nll is MEAN-reduced here, so rel-L1 (itself a mean ratio) is already in the
+        # same per-element units: no nll_units rescale, exactly as distillation_nerc.
+        steerable_weight: 2.0
+        steerable_normalize: none       # REQUIRED with nll_reduction: mean (else raises)
+        steerable_height: 5             # +2 residuals -> SCFpyr height 7 -> 22 bands @512
+        steerable_order: 3              # nbands = order+1 = 4 orientations
+        steerable_match_mode: upsample  # student 256 -> 512; keeps all 22 bands alive
+        steerable_color_mode: luminance
+        steerable_complex: True
+        steerable_complex_metric: magnitude
+        steerable_eps: 1.0e-8
+        steerable_log_bands: True       # watch residual_highpass / band_0_*: they sit
+                                        # above the student's Nyquist and may stay pinned
+        # no band schedule: all 22 bands active from epoch 0 (graded weights below)
+        steerable_band_weights:         # graded diffweight ramp, level 0 = FINEST
+          "('residual_highpass',)": 0.10
+          "('band', 0, 0)": 0.12
+          "('band', 0, 1)": 0.12
+          "('band', 0, 2)": 0.12
+          "('band', 0, 3)": 0.12
+          "('band', 1, 0)": 0.18
+          "('band', 1, 1)": 0.18
+          "('band', 1, 2)": 0.18
+          "('band', 1, 3)": 0.18
+          "('band', 2, 0)": 0.27
+          "('band', 2, 1)": 0.27
+          "('band', 2, 2)": 0.27
+          "('band', 2, 3)": 0.27
+          "('band', 3, 0)": 0.60
+          "('band', 3, 1)": 0.60
+          "('band', 3, 2)": 0.60
+          "('band', 3, 3)": 0.60
+          "('band', 4, 0)": 1.50
+          "('band', 4, 1)": 1.50
+          "('band', 4, 2)": 1.50
+          "('band', 4, 3)": 1.50
+          "('residual_lowpass',)": 0.05
+
+    ddconfig:                           # upstream kl-f8 architecture, untouched
+      double_z: True
+      z_channels: 4
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [ 1,2,4,4 ]
+      num_res_blocks: 2
+      attn_resolutions: [ ]
+      dropout: 0.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 12                      # nerc uses 24/GPU; 24 OOMs here even in fp16 (40.3/44.4 GiB,
+                                        # smoke 7519709) -> 12 x 16 accum x 2 GPUs = the same 384
+    num_workers: 8                      # nerc training_config.num_workers
+    wrap: True
+    train:
+      target: ldm_ftmse.data_nerc.NercTeacherTrain
+      params:
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/nerc_subset_20k/train.txt
+        teacher_dir: ${oc.env:LDM_DATA}/subset_20k_teacher_recons_512_png
+        size: 256
+        teacher_size: 512
+    validation:
+      target: ldm_ftmse.data_nerc.NercTeacherValidation
+      params:
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/nerc_subset_20k/val.txt
+        teacher_dir: ${oc.env:LDM_DATA}/subset_20k_teacher_recons_512_png
+        size: 256
+        teacher_size: 512
+
+lightning:
+  logger:
+    target: pytorch_lightning.loggers.WandbLogger
+    params:
+      name: ldm_nmg_l1vgg01_str2_20k
+      project: vae-knowledge-distillation
+      group: ldm_20k_nerc_recipe
+      tags: ["ldm", "20k", "gan-on", "nerc-match", "gan-ep2", "l1", "lpips0.1-vgg", "str2.0", "graded", "fp16"]
+
+  callbacks:
+    image_logger:
+      target: ldm_ftmse.wandb_logging.ImageLoggerWandb
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+
+    fixed_image:
+      target: ldm_ftmse.wandb_logging.FixedImageReconLogger
+      params:
+        image_path: ${oc.env:LDM_ROOT}/assets/fixed_recon_image.jpg
+        every_n_steps: 200
+        size: 256
+        log_key: gown
+
+    cuda_callback:
+      target: ldm_ftmse.wandb_logging.CUDACallbackLogged
+
+    periodic_ckpt:
+      target: ldm_ftmse.periodic_checkpoint.PeriodicCheckpoint
+      params:
+        dirpath: checkpoints_periodic
+        every_n_epochs: 5
+        save_on_train_end: true
+        max_keep: 0
+        save_weights_only: false
+
+  trainer:
+    benchmark: False                    # nerc: cudnn.benchmark = False
+    precision: 16                       # nerc device_config.mixed_precision -> "16-mixed" (fp16 AMP)
+    accumulate_grad_batches: 16         # 12 x 2 GPUs x 16 = 384 = nerc's 24 x 4 GPUs x 4. Every loss
+                                        # term is a per-image mean and the decoder has no BatchNorm, so
+                                        # accumulation gives the same update as the bigger micro-batch.
+    max_epochs: 25                      # 25 per user 2026-09-15 (sweep arms ran 50)
