@@ -18,6 +18,7 @@ Both are opt-in from the config; nothing changes unless the config asks for them
 """
 
 import os
+import time
 
 import numpy as np
 import torch
@@ -25,9 +26,11 @@ import torchvision
 import pytorch_lightning as pl
 from PIL import Image
 from pytorch_lightning.callbacks import Callback
+from pytorch_lightning.utilities import rank_zero_info
 from pytorch_lightning.utilities.distributed import rank_zero_only
 
-from main import ImageLogger
+from ldm_ftmse.pl_compat import reduce_scalar, root_device
+from main import CUDACallback, ImageLogger
 
 
 def _to_uint8_hwc(grid: torch.Tensor, rescale: bool = True) -> np.ndarray:
@@ -134,3 +137,78 @@ class FixedImageReconLogger(Callback):
 
     def on_train_start(self, trainer, pl_module):
         self._log(pl_module)                # step 0 baseline, before any update
+
+
+class CUDACallbackLogged(CUDACallback):
+    """Upstream's CUDACallback, with the two numbers it prints turned into metrics.
+
+    `main.py`'s CUDACallback already computes average epoch time and peak memory
+    across ranks and reports them with `rank_zero_info` -- which means the one
+    measurement that says whether a performance change worked is only available
+    by grepping a job log. This logs them as well, so two runs can be overlaid.
+
+    Registered under the key `cuda_callback`, which is what upstream calls its
+    own; `main.py:651` merges the config over `default_callbacks_cfg`, so naming
+    it that REPLACES the default rather than running both.
+
+    Metrics go through `trainer.logger.log_metrics` rather than
+    `pl_module.log()` on purpose: these are per-epoch scalars measured by the
+    callback, not quantities that should enter Lightning's step/epoch
+    aggregation, be reduced a second time, or reach a checkpoint monitor.
+    """
+
+    def on_train_epoch_end(self, trainer, pl_module, *args):
+        # *args, not `outputs`: PL 1.6 DROPPED the outputs parameter from this
+        # hook. Pinning the 1.4 signature here crashed a 2xH200 run at the end of
+        # epoch 0 (job 7464688) with
+        #   TypeError: on_train_epoch_end() missing 1 required positional argument
+        # main.py's own CUDACallback was already fixed the same way; this
+        # subclass was missed.
+        dev = root_device(trainer)
+        torch.cuda.synchronize(dev)
+        max_memory = torch.cuda.max_memory_allocated(dev) / 2 ** 20
+        epoch_time = time.time() - self.start_time
+
+        try:
+            max_memory = reduce_scalar(trainer, max_memory)
+            epoch_time = reduce_scalar(trainer, epoch_time)
+        except AttributeError:
+            return
+
+        rank_zero_info(f"Average Epoch time: {epoch_time:.2f} seconds")
+        rank_zero_info(f"Average Peak memory {max_memory:.2f}MiB")
+        self._record(trainer, float(epoch_time), float(max_memory))
+
+    @rank_zero_only
+    def _record(self, trainer, epoch_time, max_memory):
+        metrics = {"perf/epoch_time_s": epoch_time,
+                   "perf/peak_memory_mib": max_memory,
+                   "perf/epoch": float(trainer.current_epoch)}
+        if trainer.logger is not None:
+            trainer.logger.log_metrics(metrics, step=trainer.global_step)
+
+        # Also to a plain CSV, because the one number that decides whether a
+        # performance change worked should not be reachable only through a
+        # logger's web UI or a binary run file. Path comes from the environment
+        # rather than being guessed from the trainer, so the caller decides.
+        path = os.environ.get("LDM_PERF_CSV")
+        if not path:
+            return
+        cm = trainer.callback_metrics
+
+        def _get(k):
+            v = cm.get(k)
+            return "" if v is None else repr(float(v))
+
+        new = not os.path.exists(path)
+        os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+        with open(path, "a") as f:
+            if new:
+                # repr() on the loss columns, not %.4f: these exist to be
+                # compared for BIT-equality between two runs, and a rounded
+                # value would hide exactly the divergence they are here to find.
+                f.write("epoch,global_step,epoch_time_s,peak_memory_mib,"
+                        "aeloss_epoch,discloss_epoch,val_rec_loss\n")
+            f.write("{},{},{:.4f},{:.2f},{},{},{}\n".format(
+                trainer.current_epoch, trainer.global_step, epoch_time, max_memory,
+                _get("aeloss_epoch"), _get("discloss_epoch"), _get("val/rec_loss")))

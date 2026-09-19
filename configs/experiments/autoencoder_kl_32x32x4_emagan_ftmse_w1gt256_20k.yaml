@@ -1,0 +1,155 @@
+# sd-vae-ft-mse + steerable w=1.0, GRADED bands -- TARGET = GT at 256, not 512.
+#
+# Sibling of ..._w1graded_gt_20k.yaml (GT target at 512). Same GT images; the
+# comparison now happens at the STUDENT'S OWN resolution instead of upsampling
+# the student to 512.
+#
+# HOW. data_teacher VALIDATES teacher_size rather than resizing (it raises if the
+# file is not exactly teacher_size square), so teacher_size stays 512 and the
+# downscale is done inside the loss by match_mode: downsample, which bicubic-
+# downsamples the 512 GT to 256. Same route w5dn/w2dn use.
+#
+# THIS IS NOT A ONE-VARIABLE CHANGE, and cannot be. At 256 the pyramid caps at
+# floor(log2 256)-2 = 6, giving 4 oriented levels = 18 bands instead of 22 --
+# ('band', 4, *) does not exist. steerable_height drops 5 -> 4 accordingly, and
+# the 22-key weight dict would be rejected by the strict band-weight check.
+#
+# WEIGHT REMAP, frequency-matched. Band k at 256 covers the same ABSOLUTE
+# frequencies as band k+1 at 512 (0.25-0.5 c/px of a 256 grid = 64-128 cycles per
+# image width, which is 512's band_1). So each level inherits the weight the
+# equivalent frequency carried at 512, rather than the weight of its own index:
+#
+#     512 (22 bands)                 256 (18 bands)
+#     residual_highpass 0.10   ->    (above 256 Nyquist -- gone)
+#     band_0            0.12   ->    residual_highpass 0.12
+#     band_1            0.18   ->    band_0            0.18
+#     band_2            0.27   ->    band_1            0.27
+#     band_3            0.60   ->    band_2            0.60
+#     band_4            1.50   ->    band_3            1.50
+#     residual_lowpass  0.05   ->    residual_lowpass  0.05
+#
+# WHY IT MIGHT HELP. At 512 the two finest band groups sit ABOVE the 256
+# student's Nyquist -- measured residual_highpass ~0.94 across every arm and
+# every init, immovable. Comparing at 256 deletes exactly those unreachable
+# bands, so the whole term lands on frequencies the student can actually
+# produce. Against a GT target that matters more than against a teacher, since
+# GT carries even more unreachable detail.
+#
+# Reference: w1gt (GT @512) 9.443 rFID / 0.0683 LPIPS; w1graded (teacher @512)
+# 9.600 / 0.0677; control ftnoaug 9.117 / 0.0665.
+
+model:
+  base_learning_rate: 4.5e-6            # matches the w1graded RUN (9.600)
+  target: ldm_ftmse.autoencoder_steerable.AutoencoderKLSteerableEMA
+  params:
+    monitor: "val/rec_loss"             # NOTE: anti-correlated with rFID on GAN runs.
+    embed_dim: 4                        # Select checkpoints by rFID, not by this.
+    use_ema: True
+    teacher_key: teacher
+    ckpt_path: "${oc.env:LDM_ROOT}/models/ftmse_vae_ldm_with_disc.ckpt"
+    lossconfig:
+      target: ldm_ftmse.losses_steerable.LPIPSWithDiscriminatorSteerable
+      params:
+        disc_start: 200                 # ~1 epoch; safe only because the
+        kl_weight: 0.000001             # discriminator is pretrained (kl-f8, step 246803)
+        disc_weight: 0.5
+        # --- steerable distillation, the only new term ---------------------------
+        # steerable_normalize: nll_units multiplies the mean-reduced rel-L1 by
+        # 3*256*256 = 196608, putting it in the same per-image-sum units as nll_loss.
+        # Without it, weight 0.5 against a total of ~29,000 is ~1e-6 of the objective
+        # and the run would be indistinguishable from the control.
+        steerable_weight: 1.0
+        steerable_normalize: nll_units
+        steerable_height: 4             # comparison at 256 -> 18 bands (no band_4)
+        steerable_order: 3              # nbands = order+1 = 4 orientations
+        steerable_match_mode: downsample  # GT 512 -> 256; compare at the student's own res
+        steerable_color_mode: luminance
+        steerable_complex: True
+        steerable_complex_metric: magnitude
+        steerable_eps: 1.0e-8
+        steerable_log_bands: True       # watch residual_highpass / band_0_*: they sit
+                                        # above the student's Nyquist and may stay pinned
+        steerable_band_weights:         # frequency-matched remap of the graded ramp
+          "('residual_highpass',)": 0.12
+          "('band', 0, 0)": 0.18
+          "('band', 0, 1)": 0.18
+          "('band', 0, 2)": 0.18
+          "('band', 0, 3)": 0.18
+          "('band', 1, 0)": 0.27
+          "('band', 1, 1)": 0.27
+          "('band', 1, 2)": 0.27
+          "('band', 1, 3)": 0.27
+          "('band', 2, 0)": 0.60
+          "('band', 2, 1)": 0.60
+          "('band', 2, 2)": 0.60
+          "('band', 2, 3)": 0.60
+          "('band', 3, 0)": 1.50
+          "('band', 3, 1)": 1.50
+          "('band', 3, 2)": 1.50
+          "('band', 3, 3)": 1.50
+          "('residual_lowpass',)": 0.05
+
+    ddconfig:                           # upstream, untouched -- this is kl-f8
+      double_z: True
+      z_channels: 4
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [ 1,2,4,4 ]
+      num_res_blocks: 2
+      attn_resolutions: [ ]
+      dropout: 0.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 12
+    num_workers: 6                      # +2 over baseline: an extra 512 PNG decode per item
+    wrap: True
+    train:
+      target: ldm_ftmse.data_teacher.FileListSRTeacherTrain
+      params:                           # min_crop_f/max_crop_f/random_crop are forced by
+        size: 256                       # the class -- deliberately absent so the YAML
+        degradation: pil_nearest        # cannot break alignment
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/subset_20k_rcrop/train.txt
+        teacher_dir: ${oc.env:LDM_DATA}/subset_20k_rcrop   # GT, not teacher recons
+        teacher_ext: .jpg
+        teacher_size: 512
+    validation:
+      target: ldm_ftmse.data_teacher.FileListSRTeacherValidation
+      params:
+        size: 256
+        degradation: pil_nearest
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/subset_20k_rcrop/val.txt
+        teacher_dir: ${oc.env:LDM_DATA}/subset_20k_rcrop   # GT, not teacher recons
+        teacher_ext: .jpg
+        teacher_size: 512
+
+lightning:
+  callbacks:
+    image_logger:
+      target: main.ImageLogger
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+
+    # Epoch-pinned checkpoints: every 5 epochs plus the true final epoch.
+    # Writes to its own directory with no monitor and no top-k, so save_top_k
+    # (which monitors val/rec_loss -- ANTI-correlated with rFID here) cannot
+    # prune them. This replaces the polling preserver: no keeper job is needed,
+    # and there is no race against checkpoint deletion.
+    periodic_ckpt:
+      target: ldm_ftmse.periodic_checkpoint.PeriodicCheckpoint
+      params:
+        dirpath: checkpoints_periodic
+        every_n_epochs: 5               # -> ep5, 10, 15, 20, 25
+        save_on_train_end: true         # + the true final epoch
+        max_keep: 0                     # keep all (~5 x 1.03 GB per run)
+        save_weights_only: false        # keeps them resumable / post-tunable
+
+  trainer:
+    benchmark: True
+    accumulate_grad_batches: 2
+    max_epochs: 25

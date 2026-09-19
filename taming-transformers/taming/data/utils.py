@@ -8,7 +8,15 @@ from pathlib import Path
 import numpy as np
 import torch
 from taming.data.helper_types import Annotation
-from torch._six import string_classes
+# LOCAL PATCH (the only edit to a vendored upstream tree; the README's
+# "byte-identical to upstream HEAD" claim now has this one exception).
+# torch._six was REMOVED in torch 2.0. The try/except keeps this file working
+# under torch 1.11 (venv_ldm, the in-flight arms) AND torch 2.4 (venv_ldm2, the
+# H100 stack) from a single source. torch._six.string_classes was (str, bytes).
+try:
+    from torch._six import string_classes
+except ModuleNotFoundError:                     # torch >= 2.0
+    string_classes = (str, bytes)
 from torch.utils.data._utils.collate import np_str_obj_array_pattern, default_collate_err_msg_format
 from tqdm import tqdm
 

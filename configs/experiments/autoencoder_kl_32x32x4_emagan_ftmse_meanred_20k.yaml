@@ -1,0 +1,113 @@
+# emagan on sd-vae-ft-mse, no aug, no steerable -- MEAN reduction instead of SUM.
+#
+# Loss-reduction sibling of ..._ftmse_noaug_20k.yaml. Byte-identical apart from
+# the lossconfig target and two params, so the pair isolates the reduction alone.
+#
+# Upstream reduces per-image SUM (contperceptual.py:57-61):
+#     nll_loss = torch.sum(nll_loss) / nll_loss.shape[0]
+# i.e. summed over 3*256*256 = 196,608 elements. Most reimplementations
+# (SpectrumMatching among them) use a plain .mean(). Verified: our reduction=sum
+# path is BIT-IDENTICAL to upstream (loss diff 0.000e+00), and reduction=mean
+# divides nll by exactly 196,608.
+#
+# THREE THINGS MOVE, all checked rather than assumed:
+#
+#  1. logvar is INERT either way -- logvar_init=0 and loss.logvar is in NEITHER
+#     optimizer, so exp(logvar)=1 and the "+logvar" term is 0. (Measured:
+#     train/logvar = 0 at first and last step of the control.) Had it been
+#     trained, mean reduction would have changed its contribution 196,608-fold.
+#
+#  2. KL is NOT rescaled, so its RELATIVE weight jumps 196,608x.
+#     DiagonalGaussianDistribution.kl() already sums over dim=[1,2,3] and returns
+#     shape [N], and for a per-image tensor sum(x)/x.shape[0] IS mean(x). So nll
+#     shrinks and kl does not. Measured on a probe: kl term goes from 0.0000% of
+#     the loss (sum) to 0.49% (mean). This run leaves kl_weight_compensate FALSE
+#     because that is what other implementations actually do -- but it is not a
+#     no-op, and kl_weight_compensate: true divides kl_weight by 196,608 to hold
+#     the balance fixed if you want the reduction isolated from the KL shift.
+#
+#  3. d_weight mostly self-compensates -- it is ||grad nll||/||grad g||, so
+#     scaling nll scales it identically and the nll:GAN ratio survives. That
+#     holds ONLY while the clamp at 1e4 (x disc_weight 0.5 = 5000) does not bind.
+#     Measured on the control it runs 3780 -> 1569, under the ceiling, so it
+#     should be fine here -- but on a synthetic probe it DID clamp, so watch
+#     train/d_weight: if it pins at 5000 in the sum arm, the comparison is not
+#     clean.
+#
+# THE ACTUAL QUESTION IS THE OPTIMISER. Given the above, mean is the same
+# objective scaled by 1/196,608. Adam is scale-invariant in principle (m/sqrt(v)
+# cancels a global gradient scale) EXCEPT through its epsilon. At eps=1e-8, if
+# sum-mode gradients sit near 1e-3 then mean-mode ones land near 5e-9 -- below
+# eps -- and eps silently dominates the denominator, shrinking every update. If
+# this arm trains markedly slower or stalls, that is the reason, not the loss.
+
+model:
+  base_learning_rate: 4.5e-6            # upstream LDM's value. NOTE: the model
+                                      # cards do NOT publish a learning rate.
+  target: ldm_ftmse.autoencoder.AutoencoderKLDecoderOnlyEMA
+  params:
+    monitor: "val/rec_loss"
+    embed_dim: 4
+    use_ema: True
+    ckpt_path: "${oc.env:LDM_ROOT}/models/ftmse_vae_ldm_with_disc.ckpt"
+    lossconfig:
+      target: ldm_ftmse.losses_reduction.LPIPSWithDiscriminatorReduction
+      params:                           # upstream values; perceptual_weight
+        disc_start: 200        # ~1 epoch; safe only because the
+                               # discriminator is pretrained (kl-f8, step 246803)
+        kl_weight: 0.000001
+        disc_weight: 0.5
+        reduction: mean                 # upstream is per-image SUM; this is the switch
+        kl_weight_compensate: false     # faithful to other impls -- see header
+
+    ddconfig:                           # upstream, untouched -- this is kl-f8
+      double_z: True
+      z_channels: 4
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [ 1,2,4,4 ]  # num_down = len(ch_mult)-1
+      num_res_blocks: 2
+      attn_resolutions: [ ]
+      dropout: 0.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 12                      # upstream
+    num_workers: 4                      # upstream leaves this unset, which
+    wrap: True                          # defaults to batch_size*2 = 24 per rank
+    train:                              # (96 workers on 16 cores). Operational.
+      target: ldm_ftmse.data.FileListSRTrain
+      params:
+        size: 256                       # upstream
+        degradation: pil_nearest        # upstream
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/subset_20k_rcrop/train.txt
+        min_crop_f: 1.0                  # augmentation OFF -- identical to
+        max_crop_f: 1.0                  # what data_teacher forces
+        random_crop: False
+    validation:
+      target: ldm_ftmse.data.FileListSRValidation
+      params:
+        size: 256                       # upstream
+        degradation: pil_nearest        # upstream
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/subset_20k_rcrop/val.txt
+        min_crop_f: 1.0                  # augmentation OFF -- identical to
+        max_crop_f: 1.0                  # what data_teacher forces
+        random_crop: False
+
+lightning:
+  callbacks:
+    image_logger:
+      target: main.ImageLogger
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+
+  trainer:
+    benchmark: True
+    accumulate_grad_batches: 2          # upstream
+    max_epochs: 25                      # the plain run showed everything happens
+                                        # early; 25 is ample to see the effect

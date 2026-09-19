@@ -1,7 +1,19 @@
-# Built by setup_env.sh
-/venv_ldm/
-/venv_ldm.stale.*/
-
+# built by setup_env.sh
+/venv/
+/.cache/
+# built by scripts/prepare_weights.sh and training
+/models/*
+!/models/.gitkeep
+/logs/*
+!/logs/.gitkeep
+# machine-specific (absolute paths) -- regenerate with scripts/prepare_data.sh
+/filelists/*
+!/filelists/.gitkeep
+/data/*
+!/data/.gitkeep
+# taming's get_ckpt_path may write vgg.pth to a cwd-relative path at runtime
+/taming/
 __pycache__/
-*.egg-info/
 *.pyc
+*.egg-info/
+wandb/

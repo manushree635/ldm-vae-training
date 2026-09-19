@@ -1,0 +1,37 @@
+# Epoch-pinned checkpoints -- paste this into any config's `lightning.callbacks`.
+#
+# THE PROBLEM IT SOLVES. main.py sets the default ModelCheckpoint to
+# monitor=model.monitor with save_top_k=3 (latent-diffusion/main.py:578-581).
+# For the autoencoder that monitor is val/rec_loss, which is ANTI-CORRELATED
+# with rFID here -- so the default keeps the three lowest-recon-loss epochs and
+# deletes the late ones the rFID trajectory needs. Measured damage:
+#
+#   steer  trained 25 epochs, scored trajectory ends at ep16
+#   f2c    trained 25 epochs, scored trajectory ends at ep19
+#
+# f2c's true final epoch, recovered afterwards from last.ckpt, scored 9.889 --
+# against the 10.090 its last surviving epoch showed. That 0.20 gap read as
+# "the schedule lost" when it was only "we stopped looking early".
+#
+# PeriodicCheckpoint writes to its own directory with no monitor and no top-k,
+# so nothing it saves is ever pruned. Layout mirrors distillation_nerc's
+# PeriodicSavePretrainedCallback (1-indexed, zero-padded to four):
+#
+#   logs/<run>/checkpoints_periodic/checkpoint_epoch_0005.ckpt
+#
+# DISK: ~1.03 GB each. Bound it with `epochs` (save only what you will score),
+# `max_keep` (ring buffer), or save_weights_only (halves size, forfeits resume).
+
+lightning:
+  callbacks:
+    periodic_ckpt:
+      target: ldm_ftmse.periodic_checkpoint.PeriodicCheckpoint
+      params:
+        # relative paths resolve under the run's logdir
+        dirpath: checkpoints_periodic
+        # union of the two rules; either firing saves
+        epochs: [1, 2, 3, 5]            # dense early -- rFID moves most here
+        every_n_epochs: 5               # then 5, 10, 15, 20, 25
+        max_keep: 0                     # 0 = keep all (~10 GB for the above)
+        save_weights_only: false        # false keeps resume + post-tune usable
+        save_on_train_end: true         # always pin the true final epoch

@@ -1,0 +1,188 @@
+# w2mse on 1M split_0: IDENTICAL to
+# autoencoder_kl_32x32x4_emagan_ftmse_w1graded_1M_h200.yaml (the running ldm_1M
+# arm) except steerable_weight 1.0 -> 2.0.
+#
+# Same sd-vae-ft-mse base checkpoint, same split_0 data and squash geometry, same
+# graded diffweight band weights with NO schedule, same lr 1e-5, same
+# disc_start 200, same effective batch 192, same bf16 + latent-cache stack, same
+# 25 epochs. So the three-way set w=0 / w=1 / w=2 on 1M is a clean weight sweep,
+# matching how the 20k sweep already has ctrl / w1graded / w2mse as rows.
+#
+# Runs on venv_ldm2 (torch 2.4.1 + PL 1.9.5), the SAME stack as ldm_1M and
+# ldm_str0_1M -- its direct comparators. venv_ldm3 (torch 2.8) would also run on
+# H200, but putting one arm of a weight sweep on a different torch build would
+# add a stack difference to a comparison meant to isolate one number.
+
+model:
+  base_learning_rate: 1e-5            # upstream LDM's value; the model cards publish none
+  target: ldm_ftmse.autoencoder_steerable.AutoencoderKLSteerableEMA
+  params:
+    monitor: "val/rec_loss"             # NOTE: anti-correlated with rFID on GAN runs.
+    embed_dim: 4                        # Select checkpoints by rFID, not by this.
+    use_ema: True
+    teacher_key: teacher
+    ckpt_path: "${oc.env:LDM_ROOT}/models/ftmse_vae_ldm_with_disc.ckpt"
+    lossconfig:
+      target: ldm_ftmse.losses_steerable.LPIPSWithDiscriminatorSteerable
+      params:
+        disc_skip_recon_loss: True      # BIT-EXACT (verified on H200)
+        disc_start: 200                 # ~1 epoch; safe only because the
+        kl_weight: 0.000001             # discriminator is pretrained (kl-f8, step 246803)
+        disc_weight: 0.5
+
+        # --- sd-vae-ft-mse's pixel/perceptual recipe -----------------------------
+        # MSE + 0.1*LPIPS in place of upstream's L1 + 1.0*LPIPS. Upstream hardcodes
+        # torch.abs and never reads the pixelloss_weight it stores, so
+        # LPIPSWithDiscriminatorSteerable carries the generator branch (_gen_step) to
+        # make both reachable. That carry is bit-identical to upstream at
+        # pixel_loss=l1 / pixelloss_weight=1.0 -- verified |diff| = 0 on every log key
+        # -- and is only entered when one of them is non-default, so no existing arm
+        # changes behaviour.
+        #
+        # READ THIS TOGETHER WITH steerable_weight BELOW. nll_loss is a SUM over
+        # 3*256*256, and MSE + 0.1*LPIPS is several times smaller per element than
+        # L1 + 1.0*LPIPS, so the SAME steerable_weight now buys a much larger share of
+        # the objective than it did in w2mse, which logged train/steerable_share
+        # ~0.62. Watch train/steerable_share in epoch 0: near 1.0 means the pixel and
+        # perceptual terms have stopped mattering and this is a steerable-only run.
+        pixel_loss: l2
+        pixelloss_weight: 1.0
+        perceptual_weight: 0.1
+        # --- steerable distillation, the only new term ---------------------------
+        # steerable_normalize: nll_units multiplies the mean-reduced rel-L1 by
+        # 3*256*256 = 196608, putting it in the same per-image-sum units as nll_loss.
+        # Without it, weight 0.5 against a total of ~29,000 is ~1e-6 of the objective
+        # and the run would be indistinguishable from the control.
+        steerable_weight: 2.0
+        steerable_normalize: nll_units
+        steerable_height: 5             # +2 residuals -> SCFpyr height 7 -> 22 bands @512
+        steerable_order: 3              # nbands = order+1 = 4 orientations
+        steerable_match_mode: upsample  # student 256 -> 512; keeps all 22 bands alive
+        steerable_color_mode: luminance
+        steerable_complex: True
+        steerable_complex_metric: magnitude
+        steerable_eps: 1.0e-8
+        steerable_log_bands: True       # watch residual_highpass / band_0_*: they sit
+                                        # above the student's Nyquist and may stay pinned
+        steerable_band_weights:         # graded diffweight ramp, level 0 = FINEST
+          "('residual_highpass',)": 0.10
+          "('band', 0, 0)": 0.12
+          "('band', 0, 1)": 0.12
+          "('band', 0, 2)": 0.12
+          "('band', 0, 3)": 0.12
+          "('band', 1, 0)": 0.18
+          "('band', 1, 1)": 0.18
+          "('band', 1, 2)": 0.18
+          "('band', 1, 3)": 0.18
+          "('band', 2, 0)": 0.27
+          "('band', 2, 1)": 0.27
+          "('band', 2, 2)": 0.27
+          "('band', 2, 3)": 0.27
+          "('band', 3, 0)": 0.60
+          "('band', 3, 1)": 0.60
+          "('band', 3, 2)": 0.60
+          "('band', 3, 3)": 0.60
+          "('band', 4, 0)": 1.50
+          "('band', 4, 1)": 1.50
+          "('band', 4, 2)": 1.50
+          "('band', 4, 3)": 1.50
+          "('residual_lowpass',)": 0.05
+
+    ddconfig:                           # upstream, untouched -- this is kl-f8
+      double_z: True
+      z_channels: 4
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [ 1,2,4,4 ]
+      num_res_blocks: 2
+      attn_resolutions: [ ]
+      dropout: 0.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 48
+    num_workers: 8                      # MEASURED on the 1M set, cold reads
+                                        # (logs/ldm_dl1M.o7466683): the loader
+                                        # sustains 123 img/s per rank at 6 and
+                                        # 174 at 8, against a GPU demand of only
+                                        # 51.6 -- so data is NOT the limiter and
+                                        # this is headroom, not a speedup. 8 x 2
+                                        # ranks exactly fills -pe omp 16; 16
+                                        # workers measured faster still (402)
+                                        # but would put 32 processes on 16 cores.
+    wrap: True
+    train:
+      target: ldm_ftmse.data_squash.FileListSquashTeacherTrain
+      params:                           # NO CROP. data_squash does one anisotropic
+        size: 256                       # Resize((256,256)) of the full frame, matching
+        degradation: pil_nearest        # the Resize((512,512)) the teachers were built
+                                        # with. degradation is inert (LR_image dropped).
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/split_0_1M/train.txt
+        teacher_dir: ${oc.env:LDM_DATA}/teacher_recons_512_png
+        teacher_size: 512
+        latents_file: ${oc.env:LDM_DATA}/latent_cache/split_0_1M_ftmse_train.npy
+    validation:
+      target: ldm_ftmse.data_squash.FileListSquashTeacherValidation
+      params:
+        size: 256
+        degradation: pil_nearest
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/split_0_1M/val.txt
+        teacher_dir: ${oc.env:LDM_DATA}/teacher_recons_512_png
+        teacher_size: 512
+        latents_file: ${oc.env:LDM_DATA}/latent_cache/split_0_1M_ftmse_val.npy
+
+lightning:
+  modelcheckpoint:
+    params:
+      # save_top_k: -1 keeps EVERY epoch. main.py's default is save_top_k=3 on
+      # monitor=val/rec_loss, which on GAN runs is ANTI-CORRELATED with rFID and
+      # deletes the late epochs -- configs/_periodic_ckpt_snippet.yaml records
+      # the measured damage (f2c's true final epoch scored 9.889 vs the 10.090
+      # its last surviving checkpoint showed).
+      save_top_k: -1
+      # An epoch is ~3.8 h against a 12 h wall, so the job is walled MID-EPOCH
+      # essentially every time, and resume is epoch-granular -- each chain link
+      # would discard up to 3.8 h. Across the ~8 resumes max_epochs 25 needs,
+      # that is ~30 GPU-hours thrown away. 1000 optimizer steps is ~45 min here
+      # (5,159 steps/epoch), so this bounds the loss to that instead.
+      # NB PL restores model/optimizer/global_step but NOT the dataloader
+      # position, so resuming mid-epoch replays that epoch's data from the start.
+      # 5000, not 1000: at 1000 this wrote ~10 checkpoints per epoch per arm
+      # (~10 GB/epoch each), and the two 1M arms filled /projectnb/ivc-ml to its
+      # 125 TB group quota on 2026-09-06 -- both runs died with
+      # "Disk quota exceeded" mid-epoch 7. 5000 is ~2 per epoch, still bounds a
+      # wall-clock kill to ~1.6 h, at a fifth of the disk.
+      # 5160 = one epoch of optimizer steps (10,320 ckpt global_step), so every
+      # SECOND save lands exactly on an epoch boundary. At 5000 they never coincide,
+      # which is why the w5 run had no full-epoch checkpoint to resume from.
+      every_n_train_steps: 5160
+
+  logger:
+    target: pytorch_lightning.loggers.WandbLogger
+    params:
+      # NB main.py merges this over its CSV/TestTube default, whose `name` is a
+      # literal string -- so `name` must be set here or the run is called that.
+      name: ldm_w2mse_1M_h200
+      project: vae-knowledge-distillation
+      group: ldm_1M
+      tags: ["ldm", "1M", "split_0", "steerable", "w2mse", "h200", "bf16"]
+
+  callbacks:
+    cuda_callback:                      # logs perf/epoch_time_s + peak memory
+      target: ldm_ftmse.wandb_logging.CUDACallbackLogged
+
+    image_logger:
+      target: ldm_ftmse.wandb_logging.ImageLoggerWandb   # sends grids to wandb
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+
+  trainer:
+    benchmark: True
+    precision: bf16
+    accumulate_grad_batches: 2
+    max_epochs: 25

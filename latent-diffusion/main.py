@@ -14,11 +14,15 @@ from PIL import Image
 from pytorch_lightning import seed_everything
 from pytorch_lightning.trainer import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint, Callback, LearningRateMonitor
-from pytorch_lightning.utilities.distributed import rank_zero_only
-from pytorch_lightning.utilities import rank_zero_info
+# PL-version shims: this file must run under both 1.4.2 (the in-flight 20k arms)
+# and 1.9.5 (the H100-capable stack). See ldm_ftmse/pl_compat.py.
+from ldm_ftmse.pl_compat import (rank_zero_info, rank_zero_only, root_device,
+                                 reduce_scalar, default_logger_cfg,
+                                 image_logger_handler_key, apply_ddp_config)
 
 from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.util import instantiate_from_config
+from ldm_ftmse.pl_compat import default_logger_cfg as default_logger_cfg_for_version
 
 
 def get_parser(**parser_kwargs):
@@ -254,7 +258,13 @@ class SetupCallback(Callback):
             ckpt_path = os.path.join(self.ckptdir, "last.ckpt")
             trainer.save_checkpoint(ckpt_path)
 
-    def on_pretrain_routine_start(self, trainer, pl_module):
+    def setup(self, trainer, pl_module, stage=None):
+        # was on_pretrain_routine_start, removed in PL 1.8. setup() exists in
+        # both versions and fires at the same point for stage="fit"; it can be
+        # called again for validate/test, hence the idempotence guard.
+        if getattr(self, "_setup_done", False):
+            return
+        self._setup_done = True
         if trainer.global_rank == 0:
             # Create logdirs and save configs
             os.makedirs(self.logdir, exist_ok=True)
@@ -295,7 +305,8 @@ class ImageLogger(Callback):
         self.batch_freq = batch_frequency
         self.max_images = max_images
         self.logger_log_images = {
-            pl.loggers.TestTubeLogger: self._testtube,
+            **({image_logger_handler_key(): self._testtube}
+               if image_logger_handler_key() is not None else {}),
         }
         self.log_steps = [2 ** n for n in range(int(np.log2(self.batch_freq)) + 1)]
         if not increase_log_steps:
@@ -380,11 +391,11 @@ class ImageLogger(Callback):
             return True
         return False
 
-    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, *args):
         if not self.disabled and (pl_module.global_step > 0 or self.log_first_step):
             self.log_img(pl_module, batch, batch_idx, split="train")
 
-    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, *args):
         if not self.disabled and pl_module.global_step > 0:
             self.log_img(pl_module, batch, batch_idx, split="val")
         if hasattr(pl_module, 'calibrate_grad_norm'):
@@ -396,18 +407,18 @@ class CUDACallback(Callback):
     # see https://github.com/SeanNaren/minGPT/blob/master/mingpt/callback.py
     def on_train_epoch_start(self, trainer, pl_module):
         # Reset the memory use counter
-        torch.cuda.reset_peak_memory_stats(trainer.root_gpu)
-        torch.cuda.synchronize(trainer.root_gpu)
+        torch.cuda.reset_peak_memory_stats(root_device(trainer))
+        torch.cuda.synchronize(root_device(trainer))
         self.start_time = time.time()
 
-    def on_train_epoch_end(self, trainer, pl_module, outputs):
-        torch.cuda.synchronize(trainer.root_gpu)
-        max_memory = torch.cuda.max_memory_allocated(trainer.root_gpu) / 2 ** 20
+    def on_train_epoch_end(self, trainer, pl_module, *args):
+        torch.cuda.synchronize(root_device(trainer))
+        max_memory = torch.cuda.max_memory_allocated(root_device(trainer)) / 2 ** 20
         epoch_time = time.time() - self.start_time
 
         try:
-            max_memory = trainer.training_type_plugin.reduce(max_memory)
-            epoch_time = trainer.training_type_plugin.reduce(epoch_time)
+            max_memory = reduce_scalar(trainer, max_memory)
+            epoch_time = reduce_scalar(trainer, epoch_time)
 
             rank_zero_info(f"Average Epoch time: {epoch_time:.2f} seconds")
             rank_zero_info(f"Average Peak memory {max_memory:.2f}MiB")
@@ -524,10 +535,16 @@ if __name__ == "__main__":
         if not "gpus" in trainer_config:
             del trainer_config["accelerator"]
             cpu = True
+            ngpu_resolved = 1
         else:
             gpuinfo = trainer_config["gpus"]
             print(f"Running on GPUs {gpuinfo}")
             cpu = False
+            # PL 1.6+ replaced accelerator="ddp"/gpus="0,1," with
+            # accelerator="gpu"/devices=N/strategy="ddp"; `gpus` is dropped there,
+            # so capture the count now -- the lr-scaling block below used to
+            # recover it by re-parsing lightning_config.trainer.gpus.
+            ngpu_resolved = apply_ddp_config(trainer_config, gpuinfo)
         trainer_opt = argparse.Namespace(**trainer_config)
         lightning_config.trainer = trainer_config
 
@@ -556,7 +573,7 @@ if __name__ == "__main__":
                 }
             },
         }
-        default_logger_cfg = default_logger_cfgs["testtube"]
+        default_logger_cfg = default_logger_cfg_for_version(logdir, nowname)
         if "logger" in lightning_config:
             logger_cfg = lightning_config.logger
         else:
@@ -672,10 +689,7 @@ if __name__ == "__main__":
 
         # configure learning rate
         bs, base_lr = config.data.params.batch_size, config.model.base_learning_rate
-        if not cpu:
-            ngpu = len(lightning_config.trainer.gpus.strip(",").split(','))
-        else:
-            ngpu = 1
+        ngpu = ngpu_resolved
         if 'accumulate_grad_batches' in lightning_config.trainer:
             accumulate_grad_batches = lightning_config.trainer.accumulate_grad_batches
         else:
@@ -720,7 +734,13 @@ if __name__ == "__main__":
             except Exception:
                 melk()
                 raise
-        if not opt.no_test and not trainer.interrupted:
+        # No config in this repo defines a data.params.test split, so this call
+        # has no dataloader to run. PL 1.4 tolerated that; PL 1.9's DDP launcher
+        # re-spawns subprocesses and dies -- AFTER training finished and the
+        # checkpoints were safely written, which makes a completed run look
+        # failed. Only run it when a test split actually exists.
+        has_test = "test" in getattr(data, "datasets", {})
+        if not opt.no_test and not trainer.interrupted and has_test:
             trainer.test(model, data)
     except Exception:
         if opt.debug and trainer.global_rank == 0:

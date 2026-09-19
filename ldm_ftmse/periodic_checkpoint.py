@@ -121,12 +121,20 @@ class PeriodicCheckpoint(Callback):
 
     def on_train_epoch_end(self, trainer, pl_module):
         epoch_1idx = int(trainer.current_epoch) + 1
+        self._last_epoch_1idx = epoch_1idx
         if self._should_save(epoch_1idx):
             self._save(trainer, epoch_1idx, "scheduled")
 
     def on_train_end(self, trainer, pl_module):
         if not self.save_on_train_end:
             return
-        # current_epoch has already advanced past the last completed epoch by the
-        # time on_train_end fires, so this is the same +1 the epoch hook used.
-        self._save(trainer, int(trainer.current_epoch), "final")
+        # Name the final save by the last epoch the epoch hook actually saw. The first
+        # version assumed trainer.current_epoch had already advanced here; on PL 1.4.2 it
+        # has NOT, so a 25-epoch run wrote its final state a second time, mislabelled
+        # checkpoint_epoch_0024.ckpt (same global_step as 0025). Tracking the epoch hook
+        # is version-independent, and _save skips an existing file, so a final epoch the
+        # cadence already saved is not written twice.
+        epoch_1idx = getattr(self, "_last_epoch_1idx", None)
+        if epoch_1idx is None:                      # e.g. resumed and ended at once
+            epoch_1idx = int(trainer.current_epoch) + 1
+        self._save(trainer, epoch_1idx, "final")

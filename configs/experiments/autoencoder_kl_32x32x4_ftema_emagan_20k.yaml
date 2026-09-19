@@ -1,0 +1,97 @@
+# sd-vae-ft-ema recipe PLUS the two ingredients Stability had that our earlier
+# runs did not: EMA weights, and a live adversarial term.
+#
+# Both are additions to the plain ft-EMA config, so read this as an experiment,
+# not a reproduction:
+#   * use_ema  -- the model cards say both released checkpoints "use EMA
+#     weights". LDM's AutoencoderKL has no EMA (it lives in VQModel), so this
+#     needs AutoencoderKLDecoderOnlyEMA. LitEma's decay warms up as
+#     min(0.9999, (1+n)/(10+n)), so a short run does not need it lowered.
+#   * disc_start: 200 -- roughly one epoch, instead of upstream's 50001 which at
+#     ~198 optimiser steps/epoch would never fire in a 50-epoch run. Safe to
+#     start this early ONLY because the discriminator is pretrained: ckpt_path
+#     carries CompVis' kl-f8 discriminator from step 246,803.
+#
+# Whether Stability actually used a discriminator is NOT documented -- the model
+# cards never mention one. This tests the hypothesis; it does not reproduce a
+# stated recipe.
+#
+# Derived from latent-diffusion/configs/autoencoder/autoencoder_kl_32x32x4.yaml
+# (the kl-f8 / SD VAE config). The *loss is upstream's, untouched* -- ft-EMA is
+# described as using "the same loss configuration as the original checkpoint",
+# i.e. L1 + 1.0 * LPIPS, which is exactly what LDM ships. So this config points
+# straight at ldm.modules.losses.LPIPSWithDiscriminator and needs no loss
+# overlay at all. The single departure from upstream is decoder-only training.
+#
+# Reference: https://huggingface.co/stabilityai/sd-vae-ft-ema
+#   "resumed from the original checkpoint ... trained for 313198 steps",
+#   decoder-only, batch size 192,
+#   on LAION-Aesthetics + LAION-Humans.
+#
+# Initial weights are the pre-finetune SD-1.x kl-f8 VAE -- the checkpoint that
+# ft-EMA itself was resumed from. Confirmed rather than assumed: its decoder
+# differs from both ft-EMA (max |delta| 0.90) and ft-MSE (1.29), so it sits
+# upstream of both.
+
+model:
+  base_learning_rate: 4.5e-6            # upstream LDM's value. NOTE: the model
+                                      # cards do NOT publish a learning rate.
+  target: ldm_ftmse.autoencoder.AutoencoderKLDecoderOnlyEMA
+  params:
+    monitor: "val/rec_loss"
+    embed_dim: 4
+    use_ema: True
+    ckpt_path: "${oc.env:LDM_ROOT}/models/sd15_vae_ldm_with_disc.ckpt"
+    lossconfig:
+      target: ldm.modules.losses.LPIPSWithDiscriminator   # upstream, unmodified
+      params:                           # upstream values; perceptual_weight
+        disc_start: 200        # ~1 epoch; safe only because the
+                               # discriminator is pretrained (kl-f8, step 246803)
+        kl_weight: 0.000001
+        disc_weight: 0.5
+
+    ddconfig:                           # upstream, untouched -- this is kl-f8
+      double_z: True
+      z_channels: 4
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [ 1,2,4,4 ]  # num_down = len(ch_mult)-1
+      num_res_blocks: 2
+      attn_resolutions: [ ]
+      dropout: 0.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 12                      # upstream
+    num_workers: 4                      # upstream leaves this unset, which
+    wrap: True                          # defaults to batch_size*2 = 24 per rank
+    train:                              # (96 workers on 16 cores). Operational.
+      target: ldm_ftmse.data.FileListSRTrain
+      params:
+        size: 256                       # upstream
+        degradation: pil_nearest        # upstream
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/subset_20k/train.txt
+    validation:
+      target: ldm_ftmse.data.FileListSRValidation
+      params:
+        size: 256                       # upstream
+        degradation: pil_nearest        # upstream
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/subset_20k/val.txt
+
+lightning:
+  callbacks:
+    image_logger:
+      target: main.ImageLogger
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+
+  trainer:
+    benchmark: True
+    accumulate_grad_batches: 2          # upstream
+    max_epochs: 25                      # the plain run showed everything happens
+                                        # early; 25 is ample to see the effect

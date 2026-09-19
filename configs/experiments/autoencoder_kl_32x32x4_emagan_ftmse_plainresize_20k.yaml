@@ -1,0 +1,92 @@
+# emagan on sd-vae-ft-mse, NERC-STYLE DATA: plain squash resize, no cropping.
+#
+# Data-pipeline sibling of ..._ftmse_noaug_20k.yaml. Model side is byte-identical
+# -- same init, AutoencoderKLDecoderOnlyEMA, unmodified upstream
+# LPIPSWithDiscriminator, disc_start 200 / disc_weight 0.5 / kl_weight 1e-6, no
+# steerable term. ONLY the data pipeline differs, so the pair isolates
+# preprocessing.
+#
+#   ftnoaug (LDM)   CenterCrop(min_side) -> SmallestMaxSize(256)   aspect PRESERVED
+#   THIS    (nerc)  Resize((256,256))                              aspect SQUASHED
+#
+# and the source changes with it: subset_20k (ORIGINAL uncropped, e.g. 735x1102)
+# rather than subset_20k_rcrop (pre-cropped to 512x512). Resizing the rcrop files
+# would still be training on a crop, just one baked in earlier -- which would
+# defeat the comparison. The 19k/1k split is unchanged.
+#
+# On these portrait LAION faces the two are far apart: the LDM crop discards ~33%
+# of the frame height, the nerc squash compresses faces vertically ~1.5x. Every
+# arm in this study to date has used the crop; nerc's whole 1M-image line of work
+# used the squash. Nothing has ever measured what that difference is worth, which
+# makes it a live confound whenever the two projects' numbers are compared.
+#
+# ldm_ftmse.data_plainresize reproduces nerc's transform exactly -- verified max
+# abs diff 0.0 against distillation_nerc/lightning_data.py's own Compose on the
+# same source file.
+#
+# NOT usable for steerable arms: the precomputed teacher recons are rendered from
+# subset_20k_rcrop and do not align with a squashed uncropped source. That would
+# need the teacher set regenerated.
+
+model:
+  base_learning_rate: 4.5e-6            # upstream LDM's value. NOTE: the model
+                                      # cards do NOT publish a learning rate.
+  target: ldm_ftmse.autoencoder.AutoencoderKLDecoderOnlyEMA
+  params:
+    monitor: "val/rec_loss"
+    embed_dim: 4
+    use_ema: True
+    ckpt_path: "${oc.env:LDM_ROOT}/models/ftmse_vae_ldm_with_disc.ckpt"
+    lossconfig:
+      target: ldm.modules.losses.LPIPSWithDiscriminator   # upstream, unmodified
+      params:                           # upstream values; perceptual_weight
+        disc_start: 200        # ~1 epoch; safe only because the
+                               # discriminator is pretrained (kl-f8, step 246803)
+        kl_weight: 0.000001
+        disc_weight: 0.5
+
+    ddconfig:                           # upstream, untouched -- this is kl-f8
+      double_z: True
+      z_channels: 4
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [ 1,2,4,4 ]  # num_down = len(ch_mult)-1
+      num_res_blocks: 2
+      attn_resolutions: [ ]
+      dropout: 0.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 12                      # upstream
+    num_workers: 4                      # upstream leaves this unset, which
+    wrap: True                          # defaults to batch_size*2 = 24 per rank
+    train:                              # (96 workers on 16 cores). Operational.
+      target: ldm_ftmse.data_plainresize.PlainResizeTrain
+      params:
+        size: 256                       # upstream
+        interpolation: bilinear         # torchvision Resize default = nerc's
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/subset_20k/train.txt
+    validation:
+      target: ldm_ftmse.data_plainresize.PlainResizeValidation
+      params:
+        size: 256                       # upstream
+        interpolation: bilinear         # torchvision Resize default = nerc's
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/subset_20k/val.txt
+
+lightning:
+  callbacks:
+    image_logger:
+      target: main.ImageLogger
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+
+  trainer:
+    benchmark: True
+    accumulate_grad_batches: 2          # upstream
+    max_epochs: 25                      # the plain run showed everything happens
+                                        # early; 25 is ample to see the effect

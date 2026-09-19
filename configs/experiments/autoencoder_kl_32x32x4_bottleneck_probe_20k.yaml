@@ -1,0 +1,128 @@
+# BOTTLENECK PROBE. Identical to ..._emagan_ftmse_ctrl_20k.yaml (the mctrl control: L1 +
+# LPIPS + GAN, steerable OFF, 25 epochs, same 20k data) except the model class: the decoder
+# reconstructs from the frozen encoder's 512-channel PRE-bottleneck features instead of from
+# the 4-channel latent. mctrl (rFID 9.13) is therefore the matched control, already trained.
+# Reading: if the probe's REAL fine detail is far above mctrl's, the gate conv_out is what
+# discards it; if it is level, the encoder trunk already lost it. See ldm_ftmse/autoencoder_probe.py.
+# accumulate_grad_batches 4 (not 2) keeps the global batch at 96 on 2 GPUs instead of 4.
+#
+# Initialised from sd-vae-ft-mse instead of the original SD-1.x kl-f8 VAE.
+# Everything else matches the existing steerable arms: L1 + 1.0*LPIPS, EMA,
+# pretrained kl-f8 discriminator at disc_start 200, rcrop dataset + precomputed
+# 512 teacher recons, 25 epochs, decoder-only.
+#
+# THIS PAIR IS THE CONTROL THAT WAS MISSING. Both arms share the rcrop dataset
+# and therefore share its loss of random-resized-crop augmentation, so the
+# difference between them isolates the steerable term with no dataset confound --
+# unlike steerable-vs-emagan, where a ~0.28 gap was inseparable from a ~0.25
+# augmentation effect.
+#
+# Note the init is already a converged decoder-only finetune of kl-f8 on
+# MSE + 0.1*LPIPS. Its published rFID is BETTER than the kl-f8 it came from,
+# and this project measures it at 9.506 on COCO n=2000 versus sd-vae's 10.481.
+# So unlike the SD-1.5 init, there is little headroom: expect small movements,
+# and read a regression as real rather than as noise.
+
+model:
+  base_learning_rate: 4.5e-6            # upstream LDM's value; the model cards publish none
+  target: ldm_ftmse.autoencoder_probe.AutoencoderKLBottleneckProbe
+  params:
+    monitor: "val/rec_loss"             # NOTE: anti-correlated with rFID on GAN runs.
+    embed_dim: 4                        # Select checkpoints by rFID, not by this.
+    use_ema: True
+    teacher_key: teacher
+    ckpt_path: "${oc.env:LDM_ROOT}/models/ftmse_vae_ldm_with_disc.ckpt"
+    lossconfig:
+      target: ldm_ftmse.losses_steerable.LPIPSWithDiscriminatorSteerable
+      params:
+        disc_start: 200                 # ~1 epoch; safe only because the
+        kl_weight: 0.000001             # discriminator is pretrained (kl-f8, step 246803)
+        disc_weight: 0.5
+        # --- steerable distillation, the only new term ---------------------------
+        # steerable_normalize: nll_units multiplies the mean-reduced rel-L1 by
+        # 3*256*256 = 196608, putting it in the same per-image-sum units as nll_loss.
+        # Without it, weight 0.5 against a total of ~29,000 is ~1e-6 of the objective
+        # and the run would be indistinguishable from the control.
+        steerable_weight: 0.0   # CONTROL: term disabled -- L1 + LPIPS + discriminator only
+        steerable_normalize: nll_units
+        steerable_height: 5             # +2 residuals -> SCFpyr height 7 -> 22 bands @512
+        steerable_order: 3              # nbands = order+1 = 4 orientations
+        steerable_match_mode: upsample  # student 256 -> 512; keeps all 22 bands alive
+        steerable_color_mode: luminance
+        steerable_complex: True
+        steerable_complex_metric: magnitude
+        steerable_eps: 1.0e-8
+        steerable_log_bands: True       # watch residual_highpass / band_0_*: they sit
+                                        # above the student's Nyquist and may stay pinned
+        steerable_band_weights:         # graded diffweight ramp, level 0 = FINEST
+          "('residual_highpass',)": 0.10
+          "('band', 0, 0)": 0.12
+          "('band', 0, 1)": 0.12
+          "('band', 0, 2)": 0.12
+          "('band', 0, 3)": 0.12
+          "('band', 1, 0)": 0.18
+          "('band', 1, 1)": 0.18
+          "('band', 1, 2)": 0.18
+          "('band', 1, 3)": 0.18
+          "('band', 2, 0)": 0.27
+          "('band', 2, 1)": 0.27
+          "('band', 2, 2)": 0.27
+          "('band', 2, 3)": 0.27
+          "('band', 3, 0)": 0.60
+          "('band', 3, 1)": 0.60
+          "('band', 3, 2)": 0.60
+          "('band', 3, 3)": 0.60
+          "('band', 4, 0)": 1.50
+          "('band', 4, 1)": 1.50
+          "('band', 4, 2)": 1.50
+          "('band', 4, 3)": 1.50
+          "('residual_lowpass',)": 0.05
+
+    ddconfig:                           # upstream, untouched -- this is kl-f8
+      double_z: True
+      z_channels: 4
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [ 1,2,4,4 ]
+      num_res_blocks: 2
+      attn_resolutions: [ ]
+      dropout: 0.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 12
+    num_workers: 6                      # +2 over baseline: an extra 512 PNG decode per item
+    wrap: True
+    train:
+      target: ldm_ftmse.data_teacher.FileListSRTeacherTrain
+      params:                           # min_crop_f/max_crop_f/random_crop are forced by
+        size: 256                       # the class -- deliberately absent so the YAML
+        degradation: pil_nearest        # cannot break alignment
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/subset_20k_rcrop/train.txt
+        teacher_dir: ${oc.env:LDM_DATA}/subset_20k_rcrop_teacher_recons_512_png
+        teacher_size: 512
+    validation:
+      target: ldm_ftmse.data_teacher.FileListSRTeacherValidation
+      params:
+        size: 256
+        degradation: pil_nearest
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/subset_20k_rcrop/val.txt
+        teacher_dir: ${oc.env:LDM_DATA}/subset_20k_rcrop_teacher_recons_512_png
+        teacher_size: 512
+
+lightning:
+  callbacks:
+    image_logger:
+      target: main.ImageLogger
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+
+  trainer:
+    benchmark: True
+    accumulate_grad_batches: 4          # 12 x 2 GPUs x 4 = 96, matching mctrl's 12 x 4 x 2
+    max_epochs: 25
