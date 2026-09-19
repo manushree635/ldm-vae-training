@@ -1,0 +1,166 @@
+# nmnpost on 1M split_0: a 5-epoch GAN post-tune of nmn1M (L1 1 + VGG-LPIPS 1 + steerable 1, no GAN, graded, all bands at once), per request 2026-09-19:
+#   "posttune ... with 1 L1 and 1 LPIPS and 0.5 GAN for 5 epochs starting from the last epoch end of 24".
+# = the w5post recipe (..._emagan_ftmse_w5post_1M_h200.yaml) verbatim: upstream LDM loss -- L1 (pixelloss 1.0,
+# per-image sum) + VGG-LPIPS 1.0 + adaptive GAN with disc_weight 0.5, kl 1e-6, steerable_weight 0, GAN
+# model class (critic trained), lr 1e-5, disc_start 200, global batch 192, bf16, 2x H200.
+# Only ckpt_path, run name and max_epochs (2 -> 5) differ from w5post.
+#
+# Start: models/nmn_ep24ema_vae_ldm_with_disc.ckpt, built by scripts/build_posttune_start_ckpt.py from
+# the parent's epoch=000024.ckpt (gs 129000, is_last_batch verified): EMA decoder+post_quant_conv+logvar
+# swapped in, model_ema and optimizer dropped. The parent (..._nercmatch_l1vgg1_str1_1M_h200.yaml) is no-GAN, so its
+# discriminator is the pretrained kl-f8 critic it was initialised with, never trained further.
+# NB the parent trained with MEAN-reduced nll (nerc units); this post-tune uses upstream's per-image SUM,
+# as w5post did -- that is what '1 L1 / 1 LPIPS / 0.5 GAN' means in this loss.
+
+model:
+  base_learning_rate: 1e-5            # upstream LDM's value; the model cards publish none
+  target: ldm_ftmse.autoencoder_steerable.AutoencoderKLSteerableEMA
+  params:
+    monitor: "val/rec_loss"             # NOTE: anti-correlated with rFID on GAN runs.
+    embed_dim: 4                        # Select checkpoints by rFID, not by this.
+    use_ema: True
+    teacher_key: teacher
+    ckpt_path: "${oc.env:LDM_ROOT}/models/nmn_ep24ema_vae_ldm_with_disc.ckpt"
+    lossconfig:
+      target: ldm_ftmse.losses_steerable.LPIPSWithDiscriminatorSteerable
+      params:
+        disc_skip_recon_loss: True      # BIT-EXACT (verified on H200)
+        disc_start: 200                 # ~1 epoch; safe only because the
+        kl_weight: 0.000001             # discriminator is pretrained (kl-f8, step 246803)
+        disc_weight: 0.5
+        # --- steerable distillation, the only new term ---------------------------
+        # steerable_normalize: nll_units multiplies the mean-reduced rel-L1 by
+        # 3*256*256 = 196608, putting it in the same per-image-sum units as nll_loss.
+        # Without it, weight 0.5 against a total of ~29,000 is ~1e-6 of the objective
+        # and the run would be indistinguishable from the control.
+        steerable_weight: 0.0            # post-tune: L1 + LPIPS + GAN only
+        steerable_normalize: nll_units
+        steerable_height: 5             # +2 residuals -> SCFpyr height 7 -> 22 bands @512
+        steerable_order: 3              # nbands = order+1 = 4 orientations
+        steerable_match_mode: upsample  # student 256 -> 512; keeps all 22 bands alive
+        steerable_color_mode: luminance
+        steerable_complex: True
+        steerable_complex_metric: magnitude
+        steerable_eps: 1.0e-8
+        steerable_log_bands: True       # watch residual_highpass / band_0_*: they sit
+                                        # above the student's Nyquist and may stay pinned
+        steerable_band_weights:         # graded diffweight ramp, level 0 = FINEST
+          "('residual_highpass',)": 0.10
+          "('band', 0, 0)": 0.12
+          "('band', 0, 1)": 0.12
+          "('band', 0, 2)": 0.12
+          "('band', 0, 3)": 0.12
+          "('band', 1, 0)": 0.18
+          "('band', 1, 1)": 0.18
+          "('band', 1, 2)": 0.18
+          "('band', 1, 3)": 0.18
+          "('band', 2, 0)": 0.27
+          "('band', 2, 1)": 0.27
+          "('band', 2, 2)": 0.27
+          "('band', 2, 3)": 0.27
+          "('band', 3, 0)": 0.60
+          "('band', 3, 1)": 0.60
+          "('band', 3, 2)": 0.60
+          "('band', 3, 3)": 0.60
+          "('band', 4, 0)": 1.50
+          "('band', 4, 1)": 1.50
+          "('band', 4, 2)": 1.50
+          "('band', 4, 3)": 1.50
+          "('residual_lowpass',)": 0.05
+
+    ddconfig:                           # upstream, untouched -- this is kl-f8
+      double_z: True
+      z_channels: 4
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [ 1,2,4,4 ]
+      num_res_blocks: 2
+      attn_resolutions: [ ]
+      dropout: 0.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 48
+    num_workers: 8                      # MEASURED on the 1M set, cold reads
+                                        # (logs/ldm_dl1M.o7466683): the loader
+                                        # sustains 123 img/s per rank at 6 and
+                                        # 174 at 8, against a GPU demand of only
+                                        # 51.6 -- so data is NOT the limiter and
+                                        # this is headroom, not a speedup. 8 x 2
+                                        # ranks exactly fills -pe omp 16; 16
+                                        # workers measured faster still (402)
+                                        # but would put 32 processes on 16 cores.
+    wrap: True
+    train:
+      target: ldm_ftmse.data_squash.FileListSquashTeacherTrain
+      params:                           # NO CROP. data_squash does one anisotropic
+        size: 256                       # Resize((256,256)) of the full frame, matching
+        degradation: pil_nearest        # the Resize((512,512)) the teachers were built
+                                        # with. degradation is inert (LR_image dropped).
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/split_0_1M/train.txt
+        teacher_dir: ${oc.env:LDM_DATA}/teacher_recons_512_png
+        teacher_size: 512
+        latents_file: ${oc.env:LDM_DATA}/latent_cache/split_0_1M_ftmse_train.npy
+    validation:
+      target: ldm_ftmse.data_squash.FileListSquashTeacherValidation
+      params:
+        size: 256
+        degradation: pil_nearest
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/split_0_1M/val.txt
+        teacher_dir: ${oc.env:LDM_DATA}/teacher_recons_512_png
+        teacher_size: 512
+        latents_file: ${oc.env:LDM_DATA}/latent_cache/split_0_1M_ftmse_val.npy
+
+lightning:
+  modelcheckpoint:
+    params:
+      # save_top_k: -1 keeps EVERY epoch. main.py's default is save_top_k=3 on
+      # monitor=val/rec_loss, which on GAN runs is ANTI-CORRELATED with rFID and
+      # deletes the late epochs -- configs/_periodic_ckpt_snippet.yaml records
+      # the measured damage (f2c's true final epoch scored 9.889 vs the 10.090
+      # its last surviving checkpoint showed).
+      save_top_k: -1
+      # An epoch is ~3.8 h against a 12 h wall, so the job is walled MID-EPOCH
+      # essentially every time, and resume is epoch-granular -- each chain link
+      # would discard up to 3.8 h. Across the ~8 resumes max_epochs 25 needs,
+      # that is ~30 GPU-hours thrown away. 1000 optimizer steps is ~45 min here
+      # (5,159 steps/epoch), so this bounds the loss to that instead.
+      # NB PL restores model/optimizer/global_step but NOT the dataloader
+      # position, so resuming mid-epoch replays that epoch's data from the start.
+      # 5000, not 1000: at 1000 this wrote ~10 checkpoints per epoch per arm
+      # (~10 GB/epoch each), and the two 1M arms filled /projectnb/ivc-ml to its
+      # 125 TB group quota on 2026-09-06 -- both runs died with
+      # "Disk quota exceeded" mid-epoch 7. 5000 is ~2 per epoch, still bounds a
+      # wall-clock kill to ~1.6 h, at a fifth of the disk.
+      # 5160 = one epoch of optimizer steps, so every 2nd save is an exact epoch end.
+      every_n_train_steps: 5160
+
+  logger:
+    target: pytorch_lightning.loggers.WandbLogger
+    params:
+      # NB main.py merges this over its CSV/TestTube default, whose `name` is a
+      # literal string -- so `name` must be set here or the run is called that.
+      name: ldm_nmnpost_1M_h200
+      project: vae-knowledge-distillation
+      group: ldm_1M
+      tags: ["ldm", "1M", "split_0", "steerable", "nmnpost", "posttune", "h200", "bf16"]
+
+  callbacks:
+    cuda_callback:                      # logs perf/epoch_time_s + peak memory
+      target: ldm_ftmse.wandb_logging.CUDACallbackLogged
+
+    image_logger:
+      target: ldm_ftmse.wandb_logging.ImageLoggerWandb   # sends grids to wandb
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+
+  trainer:
+    benchmark: True
+    precision: bf16
+    accumulate_grad_batches: 2
+    max_epochs: 5
