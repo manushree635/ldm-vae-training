@@ -312,6 +312,7 @@ def compute_steerable_rel_l1(
     pyr_order: int,
     band_weights=None,
     match_mode: str = "upsample",
+    down_mode: str = "bicubic",
     color_mode: str = "luminance",
     pyr_complex: bool = True,
     complex_metric: str = "magnitude",
@@ -361,8 +362,20 @@ def compute_steerable_rel_l1(
                                               mode="bicubic", align_corners=False)
     elif match == "downsample":
         if student_image.shape[-2:] != teacher_image.shape[-2:]:
-            teacher_image = F.interpolate(teacher_image, size=student_image.shape[-2:],
-                                          mode="bicubic", align_corners=False)
+            dm = (down_mode or "bicubic").strip().lower()
+            if dm == "area":
+                # Area averaging = cv2.INTER_AREA. For the integer 2x step this loss
+                # actually uses (teacher 512 -> student 256) the two agree exactly: both
+                # reduce to a 2x2 box mean. Bicubic instead resamples with a 4-tap kernel
+                # that overshoots at edges, so it injects ringing into the very bands the
+                # steerable term is measuring. align_corners is not a valid argument here.
+                teacher_image = F.interpolate(teacher_image, size=student_image.shape[-2:],
+                                              mode="area")
+            elif dm == "bicubic":
+                teacher_image = F.interpolate(teacher_image, size=student_image.shape[-2:],
+                                              mode="bicubic", align_corners=False)
+            else:
+                raise ValueError("down_mode must be 'area' or 'bicubic', got {!r}".format(down_mode))
     else:
         raise ValueError("match_mode must be 'upsample' or 'downsample'")
 

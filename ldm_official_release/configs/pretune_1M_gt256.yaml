@@ -1,0 +1,195 @@
+# GT @256 TARGET, 1M. The gt512 arm with the comparison moved to the STUDENT's own
+# resolution: the distillation target is the ground-truth frame at 256, not at 512.
+#
+# This is the "one change" of swapping the target resolution, but it is three lines in the
+# config, because the loss geometry is tied to the target:
+#   teacher_size 512 -> 256. With teacher_from_source=True the dataset squashes the SOURCE
+#                frame, so it can produce the target at 256 directly -- one resize, not a
+#                squash to 512 followed by a bicubic back down to 256 inside the loss.
+#   match_mode   upsample -> downsample, though with both sides at 256 it is inert:
+#                steerable_rel_l1 guards both branches with `if student.shape != teacher.shape`.
+#                THE PREDICTION IS NEVER RESAMPLED. It is `upsample` that would lift the
+#                student 256 -> 512, which is what the teacher-target arms do.
+#   height       5 -> 4. At 256 the two finest 512 bands sit above Nyquist; ('band',4,*)
+#                does not exist, so the pyramid is 18 bands instead of 22.
+#   band weights re-indexed, NOT re-tuned. Every level shifts down one (256's band_0 is the
+#                same octave as 512's band_1), so the weights are nmnA's shifted to match
+#                frequency, exactly as the dn arm does. Dropping band_4 and leaving the
+#                rest in place would silently reweight every octave.
+#
+# Everything else is the gt512 arm verbatim: L1 1.0 + VGG-LPIPS 1.0 + steerable 1.0, no GAN,
+# teacher_from_source=True, same 1M split, same latent cache (the encoder is untouched),
+# lr 1e-5, 25 epochs.
+#
+# GT-512 twin of ..._nercmatch_l1vgg1_str1_1M_h200.yaml (nmn1M, the "pretune"), per request 2026-09-19:
+# "run the same exact pretune but using gt 512 instead of teacher reconstructions".
+#
+# ONLY the steerable TARGET changes. nmn1M compared the student against the teacher VAE's 512
+# reconstruction (teacher_recons_512_png). Here the target is the original image squashed to
+# 512x512 by the same transforms.Resize((512,512)) -- exactly the tensor the teacher was FED
+# (precompute_teacher_recons.py) -- built on the fly by data_squash(teacher_from_source=True) from
+# the image already decoded for the student. Student input, latent cache, loss, bands, optimiser,
+# batch and schedule are nmn1M verbatim. Verified on the val set: every other dataset key is
+# bit-identical to nmn1M's, target == Resize((512,512))(source); GT vs teacher recon = 3.5/255 mean.
+#
+# Conceptually this turns the steerable term from distillation into a GT reconstruction loss in the
+# pyramid domain: the 512 target holds detail no 4x32x32 latent carries and the teacher itself
+# does not reproduce, so every band gets an irreducible floor. Same substitution as the 20k
+# ..._w1graded_gt512_20k arm; distillation_nerc saw a GT target destabilise training -- if
+# steerable_rel_l1 plateaus high, that is why.
+#
+# 1M scale-up of ..._nercmatch_l1vgg1_str1_20k.yaml, per request 2026-09-15:
+#   "L1: 1 / LPIPS: 1 / StrPy: 1 / gan off / for 1M data with the graded weights,
+#    all bands at once / queue it on 2 H200s".
+#
+# The MODEL block below is that 20k config verbatim -- L1 1.0 + VGG-LPIPS 1.0 +
+# steerable 1.0, no GAN (single optimiser), graded diffweight bands with ALL 22
+# active from epoch 0 (no fine-to-coarse schedule), mean-reduced nll so
+# steerable_normalize stays `none` and weight 1.0 means what it means in
+# distillation_nerc. lr 1e-5 is both the nerc recipe's value AND what every
+# other 1M H200 arm runs at, so there is no LR confound against the 1M table.
+#
+# CHANGED from the 20k arm, all of it stack not recipe, to match the other 1M
+# H200 arms so the 1M results table stays comparable:
+#   data        split_0_1M squash teacher set + fp32 latent cache (bit-exact,
+#               the encoder is frozen and the crop deterministic)
+#   precision   fp16 -> bf16, benchmark False -> True   (the H200 stack; NB
+#               h200-stack-costs-rfid: the stack alone moved w1eq by ~0.5 rFID,
+#               so compare this against 1M arms, not against the 20k arm)
+#   batch       12 x 16 accum x 2 = 384  ->  48 x 2 accum x 2 = 192, i.e. the
+#               1M arms' global batch, NOT nerc's
+#   max_epochs  25 (unchanged), every_n_train_steps 5160 = one epoch of
+#               optimiser steps, so every save is a clean full-epoch resume point
+#
+# Expect ~2.1 h/epoch on 2xH200: the 1M GAN arms measure 3.15 h and dropping the
+# GAN is 1.47x (see nogan-saves-one-third), so ~11 epochs per 24 h job.
+
+model:
+  base_learning_rate: 1.0e-5            # nerc training_config.learning_rate (unscaled)
+  target: ldm_ftmse.autoencoder_nogan.AutoencoderKLSteerableEMANoGAN
+  params:
+    monitor: "val/rec_loss"             # NOTE: anti-correlated with rFID on GAN runs.
+    embed_dim: 4                        # Select checkpoints by rFID, not by this.
+    use_ema: True                       # eval-only extra: nerc has no EMA -> compare RAW
+    adam_weight_decay: 0.0                # 0 to match the GAN twins (nmgA/nmgB had wd removed); nerc used 1e-5
+    grad_clip_norm: 0.0                   # 0 to match the GAN twins (no clipping); nerc used 1.0
+                                        # gradient_clip_val: PL 1.4.2 + fp16 clips scaled grads)
+    teacher_key: teacher
+    ckpt_path: "${oc.env:LDM_ROOT}/models/ftmse_vae_ldm_with_disc.ckpt"
+    lossconfig:
+      target: ldm_ftmse.losses_steerable.LPIPSWithDiscriminatorSteerable
+      params:
+        disc_start: 200                 # irrelevant: disc_factor 0 below
+        kl_weight: 0.0                  # nerc use_kl_loss: false
+        disc_factor: 0.0                # NO GAN (the model class enforces this)
+        # --- nerc-style reconstruction: 1 x MSE + 0.1 x LPIPS, MEAN-reduced -------
+        pixel_loss: l1                  # L1, upstream's pixel term
+        pixelloss_weight: 1.0
+        perceptual_weight: 1.0
+        perceptual_net: vgg
+        nll_reduction: mean             # mean over C*H*W, not upstream's per-image sum
+        # --- steerable distillation, the only new term ---------------------------
+        # nll is MEAN-reduced here, so rel-L1 (itself a mean ratio) is already in the
+        # same per-element units: no nll_units rescale, exactly as distillation_nerc.
+        steerable_weight: 1.0
+        steerable_normalize: none       # REQUIRED with nll_reduction: mean (else raises)
+        steerable_height: 4             # comparison at 256 -> 18 bands (no band_4)
+        steerable_order: 3              # nbands = order+1 = 4 orientations
+        steerable_match_mode: downsample # GT 512 -> 256; compare at the student's own res
+        steerable_color_mode: luminance
+        steerable_complex: True
+        steerable_complex_metric: magnitude
+        steerable_eps: 1.0e-8
+        steerable_log_bands: True       # watch residual_highpass / band_0_*: they sit
+                                        # above the student's Nyquist and may stay pinned
+        # no band schedule: all 22 bands active from epoch 0 (graded weights below)
+        steerable_band_weights:         # 18 bands, height 4 (256 grid), frequency-matched to nmnA
+          "('residual_highpass',)": 0.12    # 64-128 cpi  <- nmnA's band 0 (128 cpi)
+          "('band', 0, 0)": 0.18            # 64 cpi      <- nmnA's band 1
+          "('band', 0, 1)": 0.18
+          "('band', 0, 2)": 0.18
+          "('band', 0, 3)": 0.18
+          "('band', 1, 0)": 0.27            # 32 cpi      <- nmnA's band 2
+          "('band', 1, 1)": 0.27
+          "('band', 1, 2)": 0.27
+          "('band', 1, 3)": 0.27
+          "('band', 2, 0)": 0.60            # 16 cpi      <- nmnA's band 3
+          "('band', 2, 1)": 0.60
+          "('band', 2, 2)": 0.60
+          "('band', 2, 3)": 0.60
+          "('band', 3, 0)": 1.50            # 8 cpi       <- nmnA's band 4
+          "('band', 3, 1)": 1.50
+          "('band', 3, 2)": 1.50
+          "('band', 3, 3)": 1.50
+          "('residual_lowpass',)": 0.05
+
+    ddconfig:                           # upstream kl-f8 architecture, untouched
+      double_z: True
+      z_channels: 4
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [ 1,2,4,4 ]
+      num_res_blocks: 2
+      attn_resolutions: [ ]
+      dropout: 0.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 48
+    num_workers: 8                      # 8 x 2 ranks exactly fills -pe omp 16
+    wrap: True
+    train:
+      target: ldm_ftmse.data_squash.FileListSquashTeacherTrain
+      params:                           # NO CROP: one anisotropic Resize((256,256))
+        size: 256                       # of the full frame, matching the Resize((512,512))
+        degradation: pil_nearest        # the teachers were built with. degradation is inert.
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/split_0_1M/train.txt
+        teacher_dir: ${oc.env:LDM_DATA}/split_0   # the SOURCE images (unused for reading; must exist)
+        teacher_from_source: True       # target = GT: the source frame itself, not a teacher recon
+        teacher_size: 256               # squashed straight to 256 = the student's own grid
+        latents_file: ${oc.env:LDM_DATA}/latent_cache/split_0_1M_ftmse_train.npy
+    validation:
+      target: ldm_ftmse.data_squash.FileListSquashTeacherValidation
+      params:
+        size: 256
+        degradation: pil_nearest
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/split_0_1M/val.txt
+        teacher_dir: ${oc.env:LDM_DATA}/split_0   # the SOURCE images (unused for reading; must exist)
+        teacher_from_source: True       # target = GT: the source frame itself, not a teacher recon
+        teacher_size: 256               # squashed straight to 256 = the student's own grid
+        latents_file: ${oc.env:LDM_DATA}/latent_cache/split_0_1M_ftmse_val.npy
+
+lightning:
+  modelcheckpoint:
+    params:
+      save_top_k: -1                    # keep EVERY epoch; val/rec_loss is a bad selector
+      every_n_train_steps: 5160         # = one epoch of optimiser steps -> each save is a
+                                        # full-epoch resume point (check is_last_batch)
+
+  logger:
+    target: pytorch_lightning.loggers.WandbLogger
+    params:
+      name: ldm_nmn_gt256_1M_h200
+      project: vae-knowledge-distillation
+      group: ldm_1M
+      tags: ["ldm", "1M", "split_0", "no-gan", "nerc-match", "l1", "lpips1.0-vgg", "str1.0", "graded", "allbands", "gt256", "h200", "bf16"]
+
+  callbacks:
+    cuda_callback:                      # logs perf/epoch_time_s + peak memory
+      target: ldm_ftmse.wandb_logging.CUDACallbackLogged
+
+    image_logger:
+      target: ldm_ftmse.wandb_logging.ImageLoggerWandb
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+
+  trainer:
+    benchmark: True
+    precision: bf16
+    accumulate_grad_batches: 2
+    max_epochs: 25

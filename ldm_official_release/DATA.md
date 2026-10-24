@@ -21,7 +21,7 @@ The bucket is private. Access is handed out as **signed URLs, valid 7 days** —
 have access to the bucket:
 
 ```bash
-./distillation_nerc/analysis/tokbench/make_1M_signed_urls.sh split_0_1M_urls.txt
+bash scripts_rebuttal/make_1M_signed_urls.sh split_0_1M_urls.txt
 ```
 
 That writes one URL per line, 201 lines. **Treat the file as a credential**: anyone holding
@@ -63,7 +63,7 @@ paths, so rebuild the lists and the latent cache on your side rather than editin
 ```bash
 bash setup_env.sh                                  # builds ./venv
 bash scripts/prepare_weights.sh                    # ftmse_vae_ldm_with_disc.ckpt
-bash scripts/prepare_data_1M.sh                    # lists + latent cache; skips the
+bash scripts_rebuttal/prepare_data_1M.sh                    # lists + latent cache; skips the
                                                    # teacher pass, already downloaded
 bash scripts/train.sh configs/pretune_1M.yaml      # stage 1, 25 epochs
 python scripts/build_posttune_start_ckpt.py --help # stage 1 -> stage 2 start

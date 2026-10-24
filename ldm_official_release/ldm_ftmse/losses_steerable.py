@@ -138,6 +138,7 @@ class LPIPSWithDiscriminatorSteerable(LPIPSWithDiscriminator):
                  steerable_order=3,
                  steerable_band_weights=None,
                  steerable_match_mode="upsample",
+                 steerable_down_mode="bicubic",   # "area" = INTER_AREA; only used by match_mode downsample
                  steerable_color_mode="luminance",
                  steerable_complex=True,
                  steerable_complex_metric="magnitude",
@@ -220,6 +221,7 @@ class LPIPSWithDiscriminatorSteerable(LPIPSWithDiscriminator):
         self.steerable_order = int(steerable_order)
         self.steerable_band_weights = steerable_band_weights
         self.steerable_match_mode = steerable_match_mode
+        self.steerable_down_mode = steerable_down_mode
         self.steerable_color_mode = steerable_color_mode
         self.steerable_complex = bool(steerable_complex)
         self.steerable_complex_metric = steerable_complex_metric
@@ -366,6 +368,7 @@ class LPIPSWithDiscriminatorSteerable(LPIPSWithDiscriminator):
             pyr_order=self.steerable_order,
             band_weights=band_weights,
             match_mode=self.steerable_match_mode,
+            down_mode=self.steerable_down_mode,
             color_mode=self.steerable_color_mode,
             pyr_complex=self.steerable_complex,
             complex_metric=self.steerable_complex_metric,

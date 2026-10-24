@@ -15,7 +15,7 @@ setup_env.sh            builds ./venv (one environment for everything)
 scripts/env.sh          source this; sets LDM_ROOT, LDM_DATA, PYTHONPATH
 scripts/prepare_weights.sh   initial checkpoints  -> models/
 scripts/prepare_data.sh      crops, teacher recons, file lists -> $LDM_DATA, filelists/
-scripts/prepare_data_1M.sh   the same for the 1M set (no crops, + latent cache)
+scripts_rebuttal/prepare_data_1M.sh   the same for the 1M set (no crops, + latent cache)
 scripts/smoke_test.sh        12 real steps on 1 GPU
 scripts/train.sh             train any config (bash or qsub), also resumes
 scripts/eval_recon.py        PSNR / LPIPS / rFID of a checkpoint
@@ -123,7 +123,7 @@ staged in GCS as tar shards behind 7-day signed URLs, and unpacking it lets you 
 teacher pass entirely.
 
 ```bash
-SRC_DIR=/path/to/your/1M/images bash scripts/prepare_data_1M.sh
+SRC_DIR=/path/to/your/1M/images bash scripts_rebuttal/prepare_data_1M.sh
 bash scripts/train.sh configs/pretune_1M.yaml
 python scripts/build_posttune_start_ckpt.py --help   # stage 1 -> stage 2 start
 bash scripts/train.sh configs/posttune_1M.yaml

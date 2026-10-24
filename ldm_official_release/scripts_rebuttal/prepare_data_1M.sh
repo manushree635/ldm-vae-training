@@ -2,8 +2,8 @@
 # From one folder of images to everything the 1M configs read (pretune_1M,
 # posttune_1M, 11_steerable_graded_1M, 12_dual_branch_1M).
 #
-#   SRC_DIR=/path/to/my/1M/images bash scripts/prepare_data_1M.sh
-#   qsub -P <project> -l gpus=1 -l gpu_c=7.0 -v SRC_DIR=/path/to/images scripts/prepare_data_1M.sh
+#   SRC_DIR=/path/to/my/1M/images bash scripts_rebuttal/prepare_data_1M.sh
+#   qsub -P <project> -l gpus=1 -l gpu_c=7.0 -v SRC_DIR=/path/to/images scripts_rebuttal/prepare_data_1M.sh
 #
 # Produces (names are the ones the 1M configs already use -- keep them):
 #
