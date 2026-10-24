@@ -76,6 +76,14 @@ def _safe_complex_abs(complex_tensor: torch.Tensor, eps: float = 1e-6) -> torch.
     return torch.sqrt(complex_tensor.real ** 2 + complex_tensor.imag ** 2 + eps)
 
 
+def _box_pool(x: torch.Tensor, k: int) -> torch.Tensor:
+    """F.avg_pool2d(x, k, stride=1, padding=k//2) over the last two dims, any rank.
+    Defaults as torch's (count_include_pad=True), so borders see zero padding."""
+    shp = x.shape
+    y = F.avg_pool2d(x.reshape(-1, 1, shp[-2], shp[-1]), int(k), stride=1, padding=int(k) // 2)
+    return y.reshape(shp)
+
+
 def _iter_steerable_bands(coeff_batch):
     # coeff[0]      residual highpass, real    [N,H,W]
     # coeff[1:-1]   levels of complex bands    [N,h,w], level 0 = FINEST
@@ -189,6 +197,8 @@ def _rel_l1_from_coeff_pairs(
     hf_mask_w_max=None,
     rel_alpha: float = 1.0,
     strict_band_weights: bool = True,
+    mag_pool_kernel: int = 0,
+    complex_metric_overrides=None,
 ):
     """Per-band relative L1 between two already-built pyramids.
 
@@ -206,6 +216,21 @@ def _rel_l1_from_coeff_pairs(
     w = _resolve_band_weights(keys, band_weights, device=sample.device,
                               dtype=torch.float32, strict=strict_band_weights)
     wsum = w.sum().clamp_min(float(eps))
+    # complex_metric_overrides: {str(band_key): "magnitude" | "complex"} -- a per-band
+    # metric, e.g. magnitude on ('band', 0, *) where phase is unrecoverable and complex
+    # elsewhere. Keys are matched like band_weights (str of the tuple) and strictly:
+    # an unmatched key or an unknown metric raises. None/{} = the single global metric.
+    metric_by_key = {}
+    if complex_metric_overrides:
+        ov = {str(k): str(v).strip().lower() for k, v in dict(complex_metric_overrides).items()}
+        known = {str(k) for k in keys}
+        bad = sorted(set(ov) - known)
+        if bad:
+            raise ValueError("complex_metric_overrides has keys that match no band: {} (bands: {})".format(bad, sorted(known)))
+        for v in ov.values():
+            if v not in ("magnitude", "complex"):
+                raise ValueError("complex_metric_overrides values must be 'magnitude' or 'complex', got {!r}".format(v))
+        metric_by_key = ov
 
     channel_pairs = []
     if teacher_offsets is None or student_offsets is None:
@@ -232,15 +257,25 @@ def _rel_l1_from_coeff_pairs(
             is_finest = isinstance(k, tuple) and len(k) == 3 and k[0] == "band" and int(k[1]) == 0
             spatial_w = hf_mask if (hf_mask is not None and is_finest) else None
 
+            metric_k = metric_by_key.get(str(k), str(complex_metric))
             if torch.is_complex(bt):
                 if bool(pyr_complex):
-                    if str(complex_metric) == "complex":
+                    if metric_k == "complex":
                         err_map = _safe_complex_abs(bt - bs_, eps=float(eps))
                         denom_map = _safe_complex_abs(bt, eps=float(eps))
                     else:  # "magnitude" -- phase-blind
                         bt_mag = _safe_complex_abs(bt, eps=float(eps))
                         bs_mag = _safe_complex_abs(bs_, eps=float(eps))
-                        err_map = (bt_mag - bs_mag).abs()
+                        if int(mag_pool_kernel) > 1:
+                            # LOCAL-ENERGY match: box-pool both magnitudes before the
+                            # difference, so texture displaced by a pixel or two costs
+                            # less than texture that is missing. The denominator stays
+                            # the UNPOOLED teacher magnitude:
+                            #   r_k = mean|pool|a_t| - pool|a_s|| / (mean|a_t| + eps)
+                            kp = int(mag_pool_kernel)
+                            err_map = (_box_pool(bt_mag, kp) - _box_pool(bs_mag, kp)).abs()
+                        else:
+                            err_map = (bt_mag - bs_mag).abs()
                         denom_map = bt_mag
                 else:
                     err_map = (bt.real - bs_.real).abs()
@@ -277,6 +312,7 @@ def compute_steerable_rel_l1(
     pyr_order: int,
     band_weights=None,
     match_mode: str = "upsample",
+    down_mode: str = "bicubic",
     color_mode: str = "luminance",
     pyr_complex: bool = True,
     complex_metric: str = "magnitude",
@@ -285,6 +321,9 @@ def compute_steerable_rel_l1(
     hf_mask_w_max=None,
     rel_alpha: float = 1.0,
     strict_band_weights: bool = True,
+    upsample_fn=None,
+    mag_pool_kernel: int = 0,
+    complex_metric_overrides=None,
 ):
     """Steerable-pyramid relative L1 between a teacher and a student image.
 
@@ -295,16 +334,48 @@ def compute_steerable_rel_l1(
     oriented levels (22 bands) and lets the diffweight ramp's heaviest ('band', 4, *)
     entries exist at all. "downsample" would compare at 256, where the pyramid caps at
     4 levels (18 bands) and those weights silently disappear.
+
+    upsample_fn: optional callable student -> student at the teacher's size, used in
+    place of the bicubic F.interpolate in "upsample" mode (e.g. a learned
+    ldm_ftmse.subpixel_up.SubPixelUp2x). None keeps the bicubic path untouched.
+    "downsample" ignores it: pixel shuffle cannot go down.
     """
+    # mag_pool_kernel > 1 box-pools the oriented bands' MAGNITUDES before differencing
+    # (magnitude metric only; residual bands keep their signed comparison). 0/1 = off,
+    # which is the original code path exactly.
+    if int(mag_pool_kernel) > 1:
+        if str(complex_metric) != "magnitude" or not bool(pyr_complex):
+            raise ValueError("mag_pool_kernel needs pyr_complex=True and complex_metric='magnitude'")
+        if int(mag_pool_kernel) % 2 == 0:
+            raise ValueError("mag_pool_kernel must be odd so the pooled map keeps its size")
     match = (match_mode or "upsample").strip().lower()
     if match == "upsample":
         if student_image.shape[-2:] != teacher_image.shape[-2:]:
-            student_image = F.interpolate(student_image, size=teacher_image.shape[-2:],
-                                          mode="bicubic", align_corners=False)
+            if upsample_fn is not None:
+                student_image = upsample_fn(student_image)
+                if student_image.shape[-2:] != teacher_image.shape[-2:]:
+                    raise ValueError(
+                        "upsample_fn returned {} but the teacher is {}".format(
+                            tuple(student_image.shape), tuple(teacher_image.shape)))
+            else:
+                student_image = F.interpolate(student_image, size=teacher_image.shape[-2:],
+                                              mode="bicubic", align_corners=False)
     elif match == "downsample":
         if student_image.shape[-2:] != teacher_image.shape[-2:]:
-            teacher_image = F.interpolate(teacher_image, size=student_image.shape[-2:],
-                                          mode="bicubic", align_corners=False)
+            dm = (down_mode or "bicubic").strip().lower()
+            if dm == "area":
+                # Area averaging = cv2.INTER_AREA. For the integer 2x step this loss
+                # actually uses (teacher 512 -> student 256) the two agree exactly: both
+                # reduce to a 2x2 box mean. Bicubic instead resamples with a 4-tap kernel
+                # that overshoots at edges, so it injects ringing into the very bands the
+                # steerable term is measuring. align_corners is not a valid argument here.
+                teacher_image = F.interpolate(teacher_image, size=student_image.shape[-2:],
+                                              mode="area")
+            elif dm == "bicubic":
+                teacher_image = F.interpolate(teacher_image, size=student_image.shape[-2:],
+                                              mode="bicubic", align_corners=False)
+            else:
+                raise ValueError("down_mode must be 'area' or 'bicubic', got {!r}".format(down_mode))
     else:
         raise ValueError("match_mode must be 'upsample' or 'downsample'")
 
@@ -331,7 +402,9 @@ def compute_steerable_rel_l1(
                 coeffs_t, coeffs_s, n, band_weights=band_weights,
                 pyr_complex=bool(pyr_complex), complex_metric=str(complex_metric),
                 eps=float(eps), hf_mask_gamma=hf_mask_gamma, hf_mask_w_max=hf_mask_w_max,
-                rel_alpha=float(rel_alpha), strict_band_weights=strict_band_weights)
+                rel_alpha=float(rel_alpha), strict_band_weights=strict_band_weights,
+                mag_pool_kernel=int(mag_pool_kernel),
+                complex_metric_overrides=complex_metric_overrides)
         if mode == "rgb":
             with torch.no_grad():
                 coeffs_t = pyr.build(torch.cat([_to_channel_t01(t32, c) for c in range(3)], dim=0))
@@ -342,7 +415,9 @@ def compute_steerable_rel_l1(
                 pyr_complex=bool(pyr_complex), complex_metric=str(complex_metric),
                 eps=float(eps), teacher_offsets=offs, student_offsets=offs,
                 hf_mask_gamma=hf_mask_gamma, hf_mask_w_max=hf_mask_w_max,
-                rel_alpha=float(rel_alpha), strict_band_weights=strict_band_weights)
+                rel_alpha=float(rel_alpha), strict_band_weights=strict_band_weights,
+                mag_pool_kernel=int(mag_pool_kernel),
+                complex_metric_overrides=complex_metric_overrides)
         raise ValueError("color_mode must be 'luminance' or 'rgb', got {!r}".format(color_mode))
 
     if amp_off is None:

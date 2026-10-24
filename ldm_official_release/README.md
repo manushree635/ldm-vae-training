@@ -15,6 +15,7 @@ setup_env.sh            builds ./venv (one environment for everything)
 scripts/env.sh          source this; sets LDM_ROOT, LDM_DATA, PYTHONPATH
 scripts/prepare_weights.sh   initial checkpoints  -> models/
 scripts/prepare_data.sh      crops, teacher recons, file lists -> $LDM_DATA, filelists/
+scripts/prepare_data_1M.sh   the same for the 1M set (no crops, + latent cache)
 scripts/smoke_test.sh        12 real steps on 1 GPU
 scripts/train.sh             train any config (bash or qsub), also resumes
 scripts/eval_recon.py        PSNR / LPIPS / rFID of a checkpoint
@@ -106,6 +107,44 @@ it; `train.sh` and `smoke_test.sh` run it first.
 
 The file lists under `filelists/` hold **absolute** image paths, so they are
 machine-specific — regenerate them (step 3) rather than copying them around.
+That includes the `filelists/split_0_1M/` lists shipped here: they point at the
+machine this copy was made on, so the 1M configs cannot run until you rebuild
+them.
+
+## The 1M run
+
+`configs/pretune_1M.yaml` is the full-scale recipe — L1 1.0 + VGG-LPIPS 1.0 +
+steerable 1.0, no GAN, all 22 graded bands from epoch 0, 25 epochs — and
+`configs/posttune_1M.yaml` is the 5-epoch adversarial stage that follows it.
+`scripts/prepare_data.sh` does **not** build what they read; use:
+
+```bash
+SRC_DIR=/path/to/your/1M/images bash scripts/prepare_data_1M.sh
+bash scripts/train.sh configs/pretune_1M.yaml
+python scripts/build_posttune_start_ckpt.py --help   # stage 1 -> stage 2 start
+bash scripts/train.sh configs/posttune_1M.yaml
+```
+
+Three ways the 1M path differs from the 20k one, each of which will break a run
+if you assume otherwise:
+
+- **No crops.** The 20k configs train on one 512×512 random crop per image. The
+  1M configs train on the *whole frame* squashed to 256×256 against a teacher
+  recon of the whole frame squashed to 512×512 (`ldm_ftmse/data_squash.py`).
+  Feeding them the rcrop directories misaligns every non-square image.
+- **The file lists are an intersection.** `make_filelists_teacher.py` keeps only
+  images that have a teacher recon, because `verify_teacher` aborts the run on a
+  missing one and at this scale a few images always fail to decode.
+- **There is a latent cache.** The encoder is frozen and the crop deterministic,
+  so its output is cached once rather than recomputed each epoch — bit-exact, but
+  keyed to the file lists. Change the lists and you must rebuild it; a stale cache
+  would otherwise train on the wrong latents. `precompute_latents.py` writes a
+  fingerprint sidecar and the dataset refuses a mismatch.
+
+Budget for it: the teacher pass is about **1 GPU-day** and **350 GB** of PNGs for
+1M images on an A40, the latent cache about **32 GB**, and training is ~2.1 h per
+epoch on 2×H200. Every prep step skips work already done, so an interrupted run
+can be resubmitted as-is.
 
 ## Choosing and changing a config
 
