@@ -8,6 +8,7 @@ Nothing in `scripts/` was changed; these four files are additive.
 | `download_1M_data.sh` | fetch + unpack the 1M set from signed URLs into `$LDM_DATA` |
 | `prepare_data_1M.sh` | teacher recons (skipped if downloaded), file lists, latent cache |
 | `make_1M_signed_urls.sh` | regenerate 7-day signed URLs (bucket owner only) |
+| `run_dnarea.sh`, `run_gt256.sh` | train either new arm with one command; `SMOKE=1` for 12 steps |
 | `../configs/pretune_1M_dnarea.yaml`, `../configs/pretune_1M_gt256.yaml` | the two new arms |
 
 ## Run it end to end
@@ -21,8 +22,15 @@ bash scripts_rebuttal/prepare_data_1M.sh                 # lists + latent cache
 bash scripts/train.sh configs/pretune_1M.yaml            # stage 1, 25 epochs
 ```
 
-`scripts/train.sh` takes any config, so swap the last line for `pretune_1M_dnarea.yaml` or
-`pretune_1M_gt256.yaml`. Stage 2 is `build_posttune_start_ckpt.py` then
+For the two new arms there is a runner each, so the last line becomes one of:
+
+```bash
+bash scripts_rebuttal/run_dnarea.sh      # SMOKE=1 for 12 steps first
+bash scripts_rebuttal/run_gt256.sh
+qsub -P <project> -l gpus=2 -l gpu_c=8.0 scripts_rebuttal/run_gt256.sh
+```
+
+They are thin wrappers over `scripts/train.sh`; `NUM_GPUS` and `EXTRA` pass through. Stage 2 is `build_posttune_start_ckpt.py` then
 `train.sh configs/posttune_1M.yaml`. [../DATA.md](../DATA.md) has the download in detail,
 [../README.md](../README.md#the-1m-run) what makes the 1M path different from the 20k one.
 
