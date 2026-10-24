@@ -1,8 +1,8 @@
 #!/bin/bash -l
 # 12 real training steps on one GPU -- run this before committing a GPU-day.
 #
-#   CONFIG=configs/04_steerable_graded.yaml bash scripts/smoke_test.sh
-#   qsub -P <project> -v CONFIG=configs/04_steerable_graded.yaml scripts/smoke_test.sh
+#   CONFIG=configs/pretune_1M_dnarea.yaml bash scripts/smoke_test.sh
+#   qsub -P <project> -v CONFIG=configs/pretune_1M_dnarea.yaml scripts/smoke_test.sh
 #
 # It exercises the whole path (env, config paths, GPU arch, data, model init from
 # the checkpoint, both optimizers, validation, image logging, checkpoint write) and
@@ -21,7 +21,7 @@ set -euo pipefail
 export LDM_ROOT="${LDM_ROOT:-${SGE_O_WORKDIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}"
 # shellcheck disable=SC1091
 source "${LDM_ROOT}/scripts/env.sh"
-: "${CONFIG:=configs/01_ftema_baseline.yaml}"
+: "${CONFIG:=configs/pretune_1M.yaml}"
 : "${BATCH:=4}"
 [[ "${CONFIG}" = /* ]] || CONFIG="${LDM_ROOT}/${CONFIG}"
 # Never let a smoke test create a wandb run.

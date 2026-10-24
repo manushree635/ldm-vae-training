@@ -53,6 +53,6 @@ convert ftmse stabilityai/sd-vae-ft-mse ""
 for name in sd15 ftmse; do
     echo "### verify ${name}"
     python scripts/verify_converted_vae.py --ckpt "${M}/${name}_vae_ldm.ckpt" \
-        --config "${LDM_ROOT}/configs/02_ftmse_baseline.yaml"
+        --config "${LDM_ROOT}/configs/pretune_1M.yaml"
 done
 ls -lh "${M}"/*.ckpt

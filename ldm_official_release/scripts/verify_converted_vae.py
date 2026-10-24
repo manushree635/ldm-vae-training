@@ -6,7 +6,7 @@ convert_diffusers_vae_to_ldm.py, and compares against the diffusers reference.
 
 After `source scripts/env.sh`:
     python scripts/verify_converted_vae.py \
-        --ckpt models/sd15_vae_ldm.ckpt --config configs/autoencoder_kl_32x32x4_ftmse_20k.yaml
+        --ckpt models/sd15_vae_ldm.ckpt --config configs/pretune_1M.yaml
 """
 
 import argparse

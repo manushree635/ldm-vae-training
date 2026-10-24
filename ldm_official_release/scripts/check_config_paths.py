@@ -1,6 +1,6 @@
 """Resolve a config and check that every file it points at exists -- before a GPU is touched.
 
-    python scripts/check_config_paths.py configs/04_steerable_graded.yaml
+    python scripts/check_config_paths.py configs/pretune_1M_dnarea.yaml
 
 The configs reach the filesystem only through ${oc.env:LDM_ROOT} and
 ${oc.env:LDM_DATA} (set by scripts/env.sh). A missing input otherwise surfaces

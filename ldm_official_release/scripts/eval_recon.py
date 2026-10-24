@@ -25,7 +25,7 @@ do not: their second decoder tail would be dropped and you would score branch 1
 alone, so for those pass the training YAML and the model is built from its
 `model.target` instead (decode() then returns the band-mixed output):
 
-    python scripts/eval_recon.py --config configs/12_dual_branch_1M.yaml \
+    python scripts/eval_recon.py --config configs/pretune_1M.yaml \
         --ckpt logs/<run>/checkpoints/last.ckpt --use_ema --filelist ...
 """
 import argparse

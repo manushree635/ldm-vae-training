@@ -2,16 +2,16 @@
 # Train any config. Runs the same way interactively and under SGE.
 #
 #   # on a machine with GPUs
-#   CONFIG=configs/04_steerable_graded.yaml NUM_GPUS=2 bash scripts/train.sh
+#   CONFIG=configs/pretune_1M_dnarea.yaml NUM_GPUS=2 bash scripts/train.sh
 #
 #   # BU SCC -- submit FROM THE REPO ROOT (-cwd is how the job finds the repo)
 #   qsub -P <project> -N w1graded -l gpus=2 -l gpu_c=8.0 \
-#        -v CONFIG=configs/04_steerable_graded.yaml,NUM_GPUS=2 scripts/train.sh
+#        -v CONFIG=configs/pretune_1M_dnarea.yaml,NUM_GPUS=2 scripts/train.sh
 #
 # NB on SGE the variables MUST go through `-v`. `CONFIG=x qsub scripts/train.sh`
 # does not forward them, and the job silently runs the default config instead.
 #
-#   CONFIG     yaml to train (default configs/01_ftema_baseline.yaml); relative paths
+#   CONFIG     yaml to train (default configs/pretune_1M.yaml); relative paths
 #              resolve against the repo root
 #   RUN_NAME   suffix of the run dir, logs/<timestamp>_<RUN_NAME> (default: the config's basename)
 #   NUM_GPUS   DDP world size (default 1). Keep `-l gpus=` equal to it.
@@ -35,7 +35,7 @@ source "${LDM_ROOT}/scripts/env.sh"
 # shellcheck disable=SC1091
 source "${LDM_ROOT}/scripts/nccl_env.sh"
 
-: "${CONFIG:=configs/01_ftema_baseline.yaml}"
+: "${CONFIG:=configs/pretune_1M.yaml}"
 : "${NUM_GPUS:=1}"
 : "${EXTRA:=}"
 : "${RESUME_DIR:=}"

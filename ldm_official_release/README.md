@@ -21,8 +21,8 @@ scripts/train.sh             train any config (bash or qsub), also resumes
 scripts/eval_recon.py        PSNR / LPIPS / rFID of a checkpoint
 scripts/export_ldm_vae_to_diffusers.py   checkpoint -> diffusers AutoencoderKL dir
 
-configs/NN_*.yaml       12 starter configs, one per recipe   -> configs/README.md
-configs/experiments/    all 139 configs from the research runs, paths made portable
+configs/pretune_1M.yaml, posttune_1M.yaml       the two-stage recipe
+configs/pretune_1M_dnarea.yaml, _gt256.yaml     the two rebuttal arms
 configs/snippets/       paste-in blocks: wandb logging, epoch-pinned checkpoints
 ldm_ftmse/              all model / loss / data code written for this project
 latent-diffusion/       upstream @ a506df5, main.py patched to run on Lightning 1.9
@@ -51,10 +51,10 @@ bash scripts/prepare_weights.sh
 SRC_DIR=/path/to/images bash scripts/prepare_data.sh
 
 # 4. check the whole path works before spending a GPU-day
-CONFIG=configs/04_steerable_graded.yaml bash scripts/smoke_test.sh
+CONFIG=configs/pretune_1M_dnarea.yaml bash scripts/smoke_test.sh
 
 # 5. train
-CONFIG=configs/04_steerable_graded.yaml NUM_GPUS=2 bash scripts/train.sh
+CONFIG=configs/pretune_1M_dnarea.yaml NUM_GPUS=2 bash scripts/train.sh
 
 # 6. score it
 python scripts/eval_recon.py --ckpt logs/<run>/checkpoints/last.ckpt --use_ema \
@@ -77,7 +77,7 @@ The launchers carry SGE headers, so `qsub` replaces `bash`. Two rules:
 qsub -P <project> -l h_rt=2:00:00 -pe omp 4 -cwd setup_env.sh
 qsub -P <project> -l gpus=1 -l gpu_c=7.0 -v SRC_DIR=/path/to/images scripts/prepare_data.sh
 qsub -P <project> -N w1graded -l gpus=2 -l gpu_c=8.0 \
-     -v CONFIG=configs/04_steerable_graded.yaml,NUM_GPUS=2 scripts/train.sh
+     -v CONFIG=configs/pretune_1M_dnarea.yaml,NUM_GPUS=2 scripts/train.sh
 ```
 
 Keep `-l gpus=` equal to `NUM_GPUS`. The default venv (torch 2.4.1+cu121) runs on
@@ -152,12 +152,18 @@ can be resubmitted as-is.
 
 ## Choosing and changing a config
 
-[configs/README.md](configs/README.md) describes the 12 starter configs and what
-each one isolates. To change a setting without editing a file, pass OmegaConf
+This branch carries only the configs the rebuttal needs: `pretune_1M.yaml` and
+`posttune_1M.yaml` are the two-stage recipe, and `pretune_1M_dnarea.yaml` /
+`pretune_1M_gt256.yaml` are the two new arms, described in
+[scripts_rebuttal/README.md](scripts_rebuttal/README.md). The 12 starter configs and
+the 139 archived research configs were removed here; they are on the
+`portable-release` branch if you need them.
+
+To change a setting without editing a file, pass OmegaConf
 overrides through `EXTRA` (space-separated):
 
 ```bash
-CONFIG=configs/04_steerable_graded.yaml NUM_GPUS=2 \
+CONFIG=configs/pretune_1M_dnarea.yaml NUM_GPUS=2 \
 EXTRA="data.params.batch_size=8 lightning.trainer.max_epochs=10 model.params.lossconfig.params.steerable_weight=2.0" \
     bash scripts/train.sh
 ```
@@ -200,8 +206,8 @@ RESUME_DIR=logs/<run> NUM_GPUS=2 bash scripts/train.sh         # continues epoch
   (~1 GB each), and choose checkpoints with `scripts/eval_recon.py`.
 - Models whose class name ends in `EMA` keep EMA weights inside the checkpoint;
   score and export them with `--use_ema` / `--use-ema`.
-- Tensorboard is the default logger (`tensorboard --logdir logs`). Config 09 and
-  most of `configs/experiments/` log to Weights & Biases: run `wandb login` first,
+- Tensorboard is the default logger (`tensorboard --logdir logs`). All four 1M
+  configs log to Weights & Biases: run `wandb login` first,
   or `export WANDB_MODE=offline`. `configs/snippets/wandb_snippet.yaml` adds it to
   any config.
 - Export for anything that speaks diffusers:
