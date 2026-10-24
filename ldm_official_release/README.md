@@ -118,6 +118,10 @@ steerable 1.0, no GAN, all 22 graded bands from epoch 0, 25 epochs — and
 `configs/posttune_1M.yaml` is the 5-epoch adversarial stage that follows it.
 `scripts/prepare_data.sh` does **not** build what they read; use:
 
+If you do not already have the images, [DATA.md](DATA.md) has the download: the set is
+staged in GCS as tar shards behind 7-day signed URLs, and unpacking it lets you skip the
+teacher pass entirely.
+
 ```bash
 SRC_DIR=/path/to/your/1M/images bash scripts/prepare_data_1M.sh
 bash scripts/train.sh configs/pretune_1M.yaml
