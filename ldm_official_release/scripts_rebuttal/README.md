@@ -5,9 +5,9 @@ Nothing in `scripts/` was changed; these four files are additive.
 
 | file | what it does |
 |---|---|
-| `download_1M_data.sh` | fetch + unpack the 1M set from signed URLs into `$LDM_DATA` |
+| `download_1M_data.sh` | fetch + unpack the 1M set into `$LDM_DATA` using `../split_0_1M_urls.txt` |
 | `prepare_data_1M.sh` | teacher recons (skipped if downloaded), file lists, latent cache |
-| `make_1M_signed_urls.sh` | regenerate 7-day signed URLs (bucket owner only) |
+| `make_1M_signed_urls.sh` | regenerate the signed URLs once they expire (bucket owner only) |
 | `run_dnarea.sh`, `run_gt256.sh` | train either new arm with one command; `SMOKE=1` for 12 steps |
 | `../configs/pretune_1M_dnarea.yaml`, `../configs/pretune_1M_gt256.yaml` | the two new arms |
 
@@ -17,7 +17,7 @@ Nothing in `scripts/` was changed; these four files are additive.
 export LDM_ROOT=$PWD LDM_DATA=/somewhere/with/1TB
 bash setup_env.sh                                        # ./venv, ~10 min
 bash scripts/prepare_weights.sh                          # ftmse_vae_ldm_with_disc.ckpt
-bash scripts_rebuttal/download_1M_data.sh urls.txt       # 591 GiB; ONLY=teacher to skip the GT
+bash scripts_rebuttal/download_1M_data.sh split_0_1M_urls.txt   # 591 GiB; ONLY=teacher skips the GT
 bash scripts_rebuttal/prepare_data_1M.sh                 # lists + latent cache
 bash scripts/train.sh configs/pretune_1M.yaml            # stage 1, 25 epochs
 ```

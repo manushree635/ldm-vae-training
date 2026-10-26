@@ -16,26 +16,29 @@ The two sets **pair by stem**: `teacher/<stem>.png` is the sd-vae-ft-mse reconst
 
 ## Getting a download link
 
-The bucket is private. Access is handed out as **signed URLs, valid 7 days** — the maximum
-`gcloud` will sign. Ask the maintainer for the URL list, or regenerate it yourself if you
-have access to the bucket:
+The bucket is private; access is handed out as **signed URLs**. The list is in this repo:
 
-```bash
-bash scripts_rebuttal/make_1M_signed_urls.sh split_0_1M_urls.txt
+```
+split_0_1M_urls.txt        201 links -- 100 gt + 100 teacher + meta
 ```
 
-That writes one URL per line, 201 lines. **Treat the file as a credential**: anyone holding
-a link can download without signing in, and a signed URL cannot be revoked individually —
-to cut access early the objects have to be deleted or the signing key rotated. For the same
-reason the URLs are not checked into this repo: they would be a live credential in version
-control, and stale within a week.
+**These links expire 2026-10-31** (7 days is the maximum `gcloud` will sign for) and each one
+downloads without any sign-in, so treat the file as a credential and do not forward it. Once
+it has expired, regenerate with bucket access:
+
+```bash
+GCS_SIGNER_SA=<signer-sa> bash scripts_rebuttal/make_1M_signed_urls.sh split_0_1M_urls.txt
+```
+
+A signed URL cannot be revoked individually -- to cut access early the objects have to be
+deleted or the signing key rotated.
 
 ## Download and unpack
 
 ```bash
 mkdir -p $LDM_DATA && cd $LDM_DATA
 # -P 4 keeps four transfers in flight; drop it if your link is the bottleneck
-xargs -a split_0_1M_urls.txt -P 4 -I{} sh -c 'curl -fsSL "{}" | tar -x'
+xargs -a $LDM_ROOT/split_0_1M_urls.txt -P 4 -I{} sh -c 'curl -fsSL "{}" | tar -x'
 ```
 
 That lands `images/`, `teacher/`, `split_0_1M/` and `README.txt` under `$LDM_DATA`. Check
