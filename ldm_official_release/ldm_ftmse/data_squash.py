@@ -45,7 +45,16 @@ from .data_teacher import _FileListSRTeacher
 
 
 class _FileListSquashTeacher(_FileListSRTeacher):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, teacher_from_source=False, **kwargs):
+        # teacher_from_source=True: the steerable TARGET is the source image itself,
+        # squashed to teacher_size x teacher_size with the same transform -- i.e. GT 512,
+        # exactly the tensor precompute_teacher_recons.py fed the teacher VAE, instead of
+        # that VAE's reconstruction. Built from the image already decoded for the student,
+        # so no teacher files are read or verified (teacher_dir must still exist; point it
+        # at the source images). Default False = the precomputed-teacher path, unchanged.
+        self.teacher_from_source = bool(teacher_from_source)
+        if self.teacher_from_source:
+            kwargs["verify_teacher"] = False
         super().__init__(*args, **kwargs)
         # Same call distillation_nerc makes. torchvision's default interpolation
         # is BILINEAR, and PIL antialiases when downscaling -- do NOT swap this
@@ -53,6 +62,7 @@ class _FileListSquashTeacher(_FileListSRTeacher):
         # this exact transform, and a different kernel reintroduces the
         # misalignment in miniature.
         self._squash = transforms.Resize((self.size, self.size))
+        self._squash_teacher = transforms.Resize((self.teacher_size, self.teacher_size))
 
     def __getitem__(self, i):
         path = self.base.paths[i]
@@ -67,11 +77,15 @@ class _FileListSquashTeacher(_FileListSRTeacher):
             "image": (arr / 127.5 - 1.0).astype(np.float32),
         }
 
-        tpath = self._teacher_path(path)
-        timg = Image.open(tpath)
-        if timg.mode != "RGB":
-            timg = timg.convert("RGB")
-        tarr = np.array(timg).astype(np.uint8)
+        if self.teacher_from_source:
+            tpath = path
+            tarr = np.array(self._squash_teacher(img)).astype(np.uint8)
+        else:
+            tpath = self._teacher_path(path)
+            timg = Image.open(tpath)
+            if timg.mode != "RGB":
+                timg = timg.convert("RGB")
+            tarr = np.array(timg).astype(np.uint8)
         if tarr.shape[:2] != (self.teacher_size, self.teacher_size):
             raise ValueError("teacher {} is {}, expected {}x{}".format(
                 tpath, tarr.shape[:2], self.teacher_size, self.teacher_size))

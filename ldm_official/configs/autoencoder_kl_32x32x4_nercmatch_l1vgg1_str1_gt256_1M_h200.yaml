@@ -144,8 +144,8 @@ data:
     train:
       target: ldm_ftmse.data_squash.FileListSquashTeacherTrain
       params:                           # NO CROP: one anisotropic Resize((256,256))
-        size: 256                       # of the full frame, matching the Resize((512,512))
-        degradation: pil_nearest        # the teachers were built with. degradation is inert.
+        size: 256                       # of the full frame. The target is the SAME frame
+        degradation: pil_nearest        # squashed to 256, so it is this tensor. inert.
         images_list_file: /projectnb/ivc-ml/mvasu6/Perceptually-Better-VAE/ldm_official/filelists/split_0_1M/train.txt
         teacher_dir: /projectnb/ivc-ml/mvasu6/LAION_FACE/split_0   # the SOURCE images (unused for reading; must exist)
         teacher_from_source: True       # target = GT: the source frame itself, not a teacher recon
