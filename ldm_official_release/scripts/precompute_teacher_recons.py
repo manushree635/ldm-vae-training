@@ -58,7 +58,13 @@ def main():
     ap.add_argument("--batch_size", type=int, default=8)
     ap.add_argument("--num_workers", type=int, default=8)
     ap.add_argument("--no_amp", action="store_true", help="fp32 instead of fp16 autocast")
+    ap.add_argument("--num_shards", type=int, default=1,
+                    help="split the work across this many processes, one GPU each. 1M images "
+                         "on one GPU is about a day; the shards write into the same out_dir.")
+    ap.add_argument("--shard_index", type=int, default=0, help="which shard this process is, 0-based")
     a = ap.parse_args()
+    if not 0 <= a.shard_index < a.num_shards:
+        raise SystemExit("--shard_index must be in [0, {})".format(a.num_shards))
 
     from diffusers import AutoencoderKL
 
@@ -73,6 +79,12 @@ def main():
     have = set(os.listdir(a.out_dir))
     todo = [p for p, s in zip(paths, stems) if s + ".png" not in have]
     print("{} images, {} already done, {} to do".format(len(paths), len(paths) - len(todo), len(todo)), flush=True)
+    if a.num_shards > 1:
+        # Round-robin, so every shard gets a similar mix and finishes at a similar time.
+        # Sharding AFTER the already-done filter means a resumed run re-splits only the
+        # remaining work, which is what keeps shards balanced across resubmissions.
+        todo = todo[a.shard_index::a.num_shards]
+        print("shard {}/{}: {} images".format(a.shard_index, a.num_shards, len(todo)), flush=True)
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     kw = {"subfolder": a.subfolder} if a.subfolder else {}
@@ -95,9 +107,12 @@ def main():
             if done % (a.batch_size * 100) == 0:
                 print("  {}/{}".format(done, len(todo)), flush=True)
 
-    with open(os.path.join(a.out_dir, "meta.json"), "w") as f:
-        json.dump({"teacher": a.teacher, "subfolder": a.subfolder, "src_dir": os.path.abspath(a.src_dir),
-                   "size": a.size, "latent_mode": "mean", "amp": use_amp, "n": len(paths)}, f, indent=2)
+    # One writer only: concurrent shards would interleave into the same file. The fields
+    # describe the whole set, not this shard, so shard 0's copy is the right one.
+    if a.shard_index == 0:
+        with open(os.path.join(a.out_dir, "meta.json"), "w") as f:
+            json.dump({"teacher": a.teacher, "subfolder": a.subfolder, "src_dir": os.path.abspath(a.src_dir),
+                       "size": a.size, "latent_mode": "mean", "amp": use_amp, "n": len(paths)}, f, indent=2)
     print("done -> {}".format(a.out_dir))
 
 

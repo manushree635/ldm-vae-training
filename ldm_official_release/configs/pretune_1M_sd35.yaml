@@ -1,0 +1,201 @@
+# pretune_1M_sd35 -- the nmn1M recipe with SD-3.5 Large's VAE as BOTH student and teacher.
+#
+# Same question as pretune_1M, asked of a different latent: L1 1.0 + VGG-LPIPS 1.0 +
+# steerable pyramid 1.0 (graded band weights, all 22 bands from epoch 0), GAN off, lr 1e-5,
+# mean-reduced losses, global batch 192, 25 epochs, decoder-only. The loss block below is
+# pretune_1M's VERBATIM -- not one steerable key differs.
+#
+# The student is the published SD-3.5 VAE and the teacher is that same VAE's own 512
+# reconstructions, so the model is distilling from its own family, exactly as pretune_1M has
+# sd-vae-ft-mse distil from sd-vae-ft-mse. Build the teacher set first:
+#
+#   bash scripts_rebuttal/prepare_sd35_teacher.sh     # SD-3.5 recons at 512 + file lists
+#   bash scripts_rebuttal/run_sd35.sh                 # this config
+#
+# CHANGED from pretune_1M, and nothing else:
+#
+#   model class   ldm_ftmse.autoencoder_flux.AutoencoderKLFluxDecoderOnlyEMA instead of
+#                 autoencoder_nogan.AutoencoderKLSteerableEMANoGAN. SD-3.5's VAE has a
+#                 16-channel latent and no quant_conv, so it is not ldm's AutoencoderKL and
+#                 converting it would mean inserting identity convs and re-keying every
+#                 tensor. This class HOLDS the diffusers module and calls it, so the thing
+#                 being finetuned IS the published VAE. Despite the file name it is not
+#                 FLUX-specific -- vae_repo/vae_class select the model.
+#   start weights vae_repo, not ckpt_path. There is no LDM-layout checkpoint to merge a
+#                 discriminator into, and none is needed: disc_factor is 0 and this class
+#                 builds no critic at all, so it runs a single optimiser like the no-GAN
+#                 class does.
+#   adam_betas    SET EXPLICITLY to torch's defaults. This is load-bearing: pretune_1M
+#                 leaves adam_betas unset and AutoencoderKLSteerableEMANoGAN then uses
+#                 (0.9, 0.999), but THIS class defaults to the GAN pair (0.5, 0.9). Leaving
+#                 it out would quietly change the optimiser and make the comparison against
+#                 the 1M table a betas confound rather than a latent one.
+#   teacher       teacher_recons_512_png_sd35 -- SD-3.5's own 512 reconstructions, written by
+#                 scripts_rebuttal/prepare_sd35_teacher.sh. Pointing this at the ft-mse
+#                 recons would cap the steerable term at a weaker VAE's output.
+#   file lists    split_0_1M_sd35, the images that actually have an SD-3.5 recon. Same
+#                 intersect-then-split as split_0_1M (make_filelists_teacher.py, seed 42,
+#                 val_n 2000), rebuilt because a different teacher pass drops different
+#                 images.
+#   latent cache  REMOVED. split_0_1M_ftmse_*.npy holds sd-vae-ft-mse's 4-channel latents;
+#                 SD-3.5's encoder is a different function with a 16-channel output, so that
+#                 cache would be silently wrong. This class has no cache path anyway. The
+#                 cost is one frozen-encoder forward per step, and it is not optional.
+#   embed_dim     16, and ddconfig z_channels 16, for the reader only: this class takes the
+#                 architecture from vae_repo and ignores both.
+#
+# NOT changed, though it would be easy to assume otherwise: the steerable block. SD-3.5's
+# VAE is still f8 -- 4 downsampling stages, block_out_channels [128, 256, 512, 512], the
+# same shape family as kl-f8 -- so the student still decodes at 256 against a 512 teacher,
+# height 5 still gives 22 bands, and the graded ramp still means what it means elsewhere.
+# Only the latent is wider (16 channels, not 4).
+#
+# scaling_factor 1.5305 / shift_factor 0.0609 from SD-3.5's config are NOT applied. These
+# losses live in image space, as in every other arm here.
+#
+# MEMORY. Batch 48 x accum 2 x 2 GPUs = 192, pretune_1M's global batch. The live encoder
+# forward that replaces the latent cache costs activations pretune_1M does not pay, so if
+# this OOMs, halve the micro-batch and double the accumulation to hold the global batch:
+#   NUM_GPUS=2 EXTRA="data.params.batch_size=24 lightning.trainer.accumulate_grad_batches=4"
+#
+# every_n_train_steps assumes the SD-3.5 intersection keeps the same ~990,574 training
+# images as split_0_1M (990574 / 192 = 5159.2). prepare_sd35_teacher.sh prints the correct
+# value for the lists it actually built -- use it if the count moved.
+
+model:
+  base_learning_rate: 1.0e-5            # nerc training_config.learning_rate (unscaled)
+  target: ldm_ftmse.autoencoder_flux.AutoencoderKLFluxDecoderOnlyEMA
+  params:
+    monitor: "val/rec_loss"             # NOTE: anti-correlated with rFID on GAN runs.
+    embed_dim: 16                       # ignored: the architecture comes from vae_repo
+    use_ema: True                       # eval-only extra: nerc has no EMA -> compare RAW
+    teacher_key: teacher
+    adam_betas: [0.9, 0.999]            # torch defaults = what pretune_1M actually runs.
+                                        # This class would otherwise use the GAN pair
+                                        # (0.5, 0.9). See the header -- do not drop this.
+    vae_repo: ${oc.env:LDM_ROOT}/models/sd35_stock_vae
+    vae_subfolder: null                 # that directory IS the VAE, not a pipeline repo
+    vae_class: AutoencoderKL            # SD-3.5's config.json: _class_name AutoencoderKL,
+                                        # latent_channels 16
+    # adam_weight_decay / grad_clip_norm are not listed: pretune_1M sets both to 0.0, and
+    # this class applies neither (Adam's default weight_decay is already 0 and it does no
+    # clipping), so passing them would only suggest they do something here.
+    lossconfig:
+      target: ldm_ftmse.losses_steerable.LPIPSWithDiscriminatorSteerable
+      params:
+        disc_start: 200                 # irrelevant: disc_factor 0 below
+        kl_weight: 0.0                  # nerc use_kl_loss: false. Also why the 16-channel
+                                        # posterior's KL never enters the objective.
+        disc_factor: 0.0                # NO GAN -> this class builds a single optimiser
+        # --- nerc-style reconstruction: 1 x L1 + 1 x LPIPS, MEAN-reduced ----------
+        pixel_loss: l1                  # L1, upstream's pixel term
+        pixelloss_weight: 1.0
+        perceptual_weight: 1.0
+        perceptual_net: vgg
+        nll_reduction: mean             # mean over C*H*W, not upstream's per-image sum
+        # --- steerable distillation, the only new term ---------------------------
+        # nll is MEAN-reduced here, so rel-L1 (itself a mean ratio) is already in the
+        # same per-element units: no nll_units rescale, exactly as distillation_nerc.
+        steerable_weight: 1.0
+        steerable_normalize: none       # REQUIRED with nll_reduction: mean (else raises)
+        steerable_height: 5             # +2 residuals -> SCFpyr height 7 -> 22 bands @512
+        steerable_order: 3              # nbands = order+1 = 4 orientations
+        steerable_match_mode: upsample  # student 256 -> 512; keeps all 22 bands alive
+        steerable_color_mode: luminance
+        steerable_complex: True
+        steerable_complex_metric: magnitude
+        steerable_eps: 1.0e-8
+        steerable_log_bands: True       # watch residual_highpass / band_0_*: they sit
+                                        # above the student's Nyquist and may stay pinned
+        # no band schedule: all 22 bands active from epoch 0 (graded weights below)
+        steerable_band_weights:         # graded diffweight ramp, level 0 = FINEST
+          "('residual_highpass',)": 0.10
+          "('band', 0, 0)": 0.12
+          "('band', 0, 1)": 0.12
+          "('band', 0, 2)": 0.12
+          "('band', 0, 3)": 0.12
+          "('band', 1, 0)": 0.18
+          "('band', 1, 1)": 0.18
+          "('band', 1, 2)": 0.18
+          "('band', 1, 3)": 0.18
+          "('band', 2, 0)": 0.27
+          "('band', 2, 1)": 0.27
+          "('band', 2, 2)": 0.27
+          "('band', 2, 3)": 0.27
+          "('band', 3, 0)": 0.60
+          "('band', 3, 1)": 0.60
+          "('band', 3, 2)": 0.60
+          "('band', 3, 3)": 0.60
+          "('band', 4, 0)": 1.50
+          "('band', 4, 1)": 1.50
+          "('band', 4, 2)": 1.50
+          "('band', 4, 3)": 1.50
+          "('residual_lowpass',)": 0.05
+
+    ddconfig:                           # ignored: the architecture comes from vae_repo.
+      double_z: True                    # Kept so the file reads like its 4-channel twin.
+      z_channels: 16
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [ 1,2,4,4 ]
+      num_res_blocks: 2
+      attn_resolutions: [ ]
+      dropout: 0.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 48
+    num_workers: 8                      # 8 x 2 ranks exactly fills -pe omp 16
+    wrap: True
+    train:
+      target: ldm_ftmse.data_squash.FileListSquashTeacherTrain
+      params:                           # NO CROP: one anisotropic Resize((256,256))
+        size: 256                       # of the full frame, matching the Resize((512,512))
+        degradation: pil_nearest        # the teachers were built with. degradation is inert.
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/split_0_1M_sd35/train.txt
+        teacher_dir: ${oc.env:LDM_DATA}/teacher_recons_512_png_sd35
+        teacher_size: 512
+                                        # no latents_file: see the header
+    validation:
+      target: ldm_ftmse.data_squash.FileListSquashTeacherValidation
+      params:
+        size: 256
+        degradation: pil_nearest
+        images_list_file: ${oc.env:LDM_ROOT}/filelists/split_0_1M_sd35/val.txt
+        teacher_dir: ${oc.env:LDM_DATA}/teacher_recons_512_png_sd35
+        teacher_size: 512
+
+lightning:
+  modelcheckpoint:
+    params:
+      save_top_k: -1                    # keep EVERY epoch; val/rec_loss is a bad selector
+      every_n_train_steps: 5160         # = one epoch of optimiser steps -> each save is a
+                                        # full-epoch resume point (check is_last_batch)
+
+  logger:
+    target: pytorch_lightning.loggers.WandbLogger
+    params:
+      name: ldm_nmn_l1vgg1_str1_sd35_1M
+      project: vae-knowledge-distillation
+      group: ldm_1M
+      tags: ["ldm", "1M", "split_0", "sd35", "16ch", "no-gan", "nerc-match", "l1", "lpips1.0-vgg", "str1.0", "graded", "allbands", "bf16"]
+
+  callbacks:
+    cuda_callback:                      # logs perf/epoch_time_s + peak memory
+      target: ldm_ftmse.wandb_logging.CUDACallbackLogged
+
+    image_logger:
+      target: ldm_ftmse.wandb_logging.ImageLoggerWandb
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+
+  trainer:
+    benchmark: True
+    precision: bf16
+    accumulate_grad_batches: 2
+    max_epochs: 25

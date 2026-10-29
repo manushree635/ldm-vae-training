@@ -64,10 +64,21 @@ class TestModelTrainingStep(unittest.TestCase):
         self.assertTrue(items, "no model classes found in configs/")
         for target, path in items:
             with self.subTest(model=target.rsplit(".", 1)[1], config=rel(path)):
+                # A diffusers-held VAE (vae_repo) is a directory outside the repo, so a
+                # fresh clone may not have it. from_pretrained raises OSError rather than
+                # FileNotFoundError, so check here instead of widening the catch below and
+                # swallowing real failures with it.
+                repo = OmegaConf.load(path).get("model", {}).get("params", {}).get("vae_repo")
+                if repo and os.sep in str(repo) and not os.path.isdir(str(repo)):
+                    self.skipTest("needs a VAE not on this machine: {}".format(repo))
                 try:
                     cfg, model = build(path)
                 except FileNotFoundError as e:
                     self.skipTest("needs a file not on this machine: {}".format(e))
+                except ImportError as e:
+                    # setup_env.sh installs diffusers, but it is optional for the ldm-native
+                    # classes, so a venv without it should skip this arm rather than fail it.
+                    self.skipTest("needs a package not in this venv: {}".format(e))
                 batch = {model.image_key: torch.rand(1, 256, 256, 3) * 2 - 1}
                 teacher_key = getattr(model, "teacher_key", None)
                 if teacher_key:
@@ -91,7 +102,9 @@ class TestModelTrainingStep(unittest.TestCase):
 
                 frozen = [n for n, p in model.named_parameters() if not p.requires_grad]
                 if "FullEnc" not in target and "Probe" not in target:
-                    self.assertTrue(any(n.startswith("encoder.") for n in frozen),
+                    # "encoder." for the ldm classes, "vae.encoder." for the ones that hold a
+                    # diffusers module instead of converting it (autoencoder_flux).
+                    self.assertTrue(any(n.startswith(("encoder.", "vae.encoder.")) for n in frozen),
                                     "decoder-only class left the encoder trainable")
                 del model
 
