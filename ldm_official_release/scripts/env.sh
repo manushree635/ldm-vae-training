@@ -49,6 +49,15 @@ source "${LDM_VENV}/bin/activate"
 # __init__.py (implicit namespace packages), so they go on the path wholesale.
 export PYTHONPATH="${LDM_ROOT}:${LDM_ROOT}/latent-diffusion:${LDM_ROOT}/taming-transformers${PYTHONPATH:+:${PYTHONPATH}}"
 
+# EXTRA_PYTHONPATH prepends a package overlay AHEAD of the venv, so one arm can use a
+# different version of a library without rebuilding the venv for every other arm. The
+# FLUX.2 arm needs it: AutoencoderKLFlux2 does not exist in the pinned diffusers 0.30.3.
+#   EXTRA_PYTHONPATH=$LDM_ROOT/pylibs/diffusers036 bash scripts_rebuttal/run_flux2.sh
+# scripts_rebuttal/install_diffusers036.sh builds that directory.
+if [[ -n "${EXTRA_PYTHONPATH:-}" ]]; then
+    export PYTHONPATH="${EXTRA_PYTHONPATH}:${PYTHONPATH}"
+fi
+
 # Weight caches. Left alone if you already export them.
 export HF_HOME="${HF_HOME:-${LDM_ROOT}/.cache/huggingface}"
 export TORCH_HOME="${TORCH_HOME:-${LDM_ROOT}/.cache/torch}"

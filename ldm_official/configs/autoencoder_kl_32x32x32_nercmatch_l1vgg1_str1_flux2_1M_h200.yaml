@@ -1,0 +1,208 @@
+# Research copy of ldm_official_release/configs/pretune_1M_flux2.yaml: absolute paths instead
+# of ${oc.env:LDM_ROOT}/${oc.env:LDM_DATA}, nothing else. The teacher set and the file lists
+# are built by that tree's scripts_rebuttal/prepare_flux2_teacher.sh. pylibs/diffusers036
+# already exists in this tree.
+#
+# pretune_1M_flux2 -- the nmn1M recipe with FLUX.2's VAE as BOTH student and teacher.
+#
+# The SD-3.5 arm's twin, one latent wider: 32 channels instead of 16. Together with
+# pretune_1M (4ch) and pretune_1M_sd35 (16ch) this is a latent-WIDTH ladder at a fixed
+# spatial rate, because all three VAEs are f8 with block_out_channels [128, 256, 512, 512].
+# The loss block below is pretune_1M's VERBATIM -- not one steerable key differs.
+#
+#   bash scripts_rebuttal/install_diffusers036.sh      # once: AutoencoderKLFlux2 needs it
+#   bash scripts_rebuttal/prepare_flux2_teacher.sh     # FLUX.2 recons at 512 + file lists
+#   bash scripts_rebuttal/run_flux2.sh                 # this config
+#
+# MEASURED on black-forest-labs/FLUX.2-dev's vae/ (diffusers 0.36, this machine):
+#   latent_channels 32, block_out_channels [128, 256, 512, 512], 4 downsampling stages
+#   -> f8, so a 256 input gives a 32x32x32 latent. encoder 34.4M + decoder 49.6M = 84.0M.
+#   use_quant_conv True, use_post_quant_conv True.
+#   No scaling_factor and no shift_factor in its config at all, so there is nothing to
+#   leave unapplied here -- unlike SD-3.5, which carries both.
+#
+# THE STACK, and it is not optional. AutoencoderKLFlux2 was added in diffusers 0.36 and does
+# not exist in the 0.30.3 that setup_env.sh pins. Rather than move every other arm's
+# diffusers, install 0.36 --no-deps into a directory and put it ahead of the venv:
+#   EXTRA_PYTHONPATH=/projectnb/ivc-ml/mvasu6/Perceptually-Better-VAE/ldm_official/pylibs/diffusers036
+# scripts/env.sh honours that variable and run_flux2.sh sets it, so the venv is untouched
+# and every other arm keeps 0.30.3. 0.36 is the last release that still supports python 3.9,
+# which is what setup_env.sh's cu121 variant builds; it needs torch >= 2.4 (it touches
+# torch.xpu at import) and both setup_env.sh variants are newer than that.
+#
+# GATED. black-forest-labs/FLUX.2-dev needs a HuggingFace account that has accepted its
+# licence. Run `huggingface-cli login` before prepare_flux2_teacher.sh, which saves the VAE
+# locally once so the sharded teacher pass does not re-fetch it per process.
+#
+# CHANGED from pretune_1M -- the same four differences as the SD-3.5 arm, plus the stack:
+#
+#   model class   ldm_ftmse.autoencoder_flux.AutoencoderKLFluxDecoderOnlyEMA. It HOLDS the
+#                 diffusers module instead of converting it into ldm's AutoencoderKL, and
+#                 resolves vae_class out of diffusers by name.
+#   start weights vae_repo, not ckpt_path: there is no LDM-layout checkpoint for this VAE,
+#                 and none is needed with disc_factor 0 (this class builds no critic).
+#   adam_betas    SET EXPLICITLY to torch's defaults, for the same reason as the SD-3.5 arm:
+#                 pretune_1M leaves it unset and gets (0.9, 0.999), but THIS class defaults
+#                 to the GAN pair (0.5, 0.9). Leaving it out would make the comparison a
+#                 betas confound instead of a latent-width one.
+#   teacher       teacher_recons_512_png_flux2 -- FLUX.2's OWN 512 reconstructions, so the
+#                 student distils from its own family. ft-mse's recons would cap the
+#                 steerable term at a weaker VAE's output.
+#   file lists    split_0_1M_flux2, rebuilt because a different teacher pass drops a
+#                 different handful of undecodable images.
+#   latent cache  REMOVED. split_0_1M_ftmse_*.npy is ft-mse's 4-channel latents; this
+#                 encoder is a different function with a 32-channel output, and the class
+#                 has no cache path. One frozen-encoder forward per step instead.
+#   embed_dim     32, and ddconfig z_channels 32, for the reader only: this class takes the
+#                 architecture from vae_repo and ignores both.
+#
+# UNLIKE the SD-3.5 arm, this VAE HAS quant_conv and post_quant_conv. The model class
+# handles that generically -- it freezes encoder + quant_conv and puts decoder +
+# post_quant_conv in the optimiser -- so nothing here needs to say so. Expect the startup
+# line to report slightly more trainable than SD-3.5's 49.5M.
+#
+# MEMORY. Batch 48 x accum 2 x 2 GPUs = 192, pretune_1M's global batch. This arm pays both
+# the live encoder forward (no latent cache) AND a 32-channel latent, so of the three it is
+# the most likely to need a smaller micro-batch. Hold the global batch when you shrink it:
+#   NUM_GPUS=2 EXTRA="data.params.batch_size=24 lightning.trainer.accumulate_grad_batches=4"
+#
+# every_n_train_steps assumes the FLUX.2 intersection keeps the same ~990,574 training
+# images as split_0_1M (990574 / 192 = 5159.2). prepare_flux2_teacher.sh prints the correct
+# value for the lists it actually built -- use it if the count moved.
+
+model:
+  base_learning_rate: 1.0e-5            # nerc training_config.learning_rate (unscaled)
+  target: ldm_ftmse.autoencoder_flux.AutoencoderKLFluxDecoderOnlyEMA
+  params:
+    monitor: "val/rec_loss"             # NOTE: anti-correlated with rFID on GAN runs.
+    embed_dim: 32                       # ignored: the architecture comes from vae_repo
+    use_ema: True                       # eval-only extra: nerc has no EMA -> compare RAW
+    teacher_key: teacher
+    adam_betas: [0.9, 0.999]            # torch defaults = what pretune_1M actually runs.
+                                        # This class would otherwise use the GAN pair
+                                        # (0.5, 0.9). See the header -- do not drop this.
+    vae_repo: /projectnb/ivc-ml/mvasu6/Perceptually-Better-VAE/ldm_official/models/flux2_stock_vae
+    vae_subfolder: null                 # that directory IS the VAE, not a pipeline repo
+    vae_class: AutoencoderKLFlux2       # diffusers >= 0.36 only -- see THE STACK above
+    # adam_weight_decay / grad_clip_norm are not listed: pretune_1M sets both to 0.0, and
+    # this class applies neither (Adam's default weight_decay is already 0 and it does no
+    # clipping), so passing them would only suggest they do something here.
+    lossconfig:
+      target: ldm_ftmse.losses_steerable.LPIPSWithDiscriminatorSteerable
+      params:
+        disc_start: 200                 # irrelevant: disc_factor 0 below
+        kl_weight: 0.0                  # nerc use_kl_loss: false. Also why the 32-channel
+                                        # posterior's KL never enters the objective.
+        disc_factor: 0.0                # NO GAN -> this class builds a single optimiser
+        # --- nerc-style reconstruction: 1 x L1 + 1 x LPIPS, MEAN-reduced ----------
+        pixel_loss: l1                  # L1, upstream's pixel term
+        pixelloss_weight: 1.0
+        perceptual_weight: 1.0
+        perceptual_net: vgg
+        nll_reduction: mean             # mean over C*H*W, not upstream's per-image sum
+        # --- steerable distillation, the only new term ---------------------------
+        # nll is MEAN-reduced here, so rel-L1 (itself a mean ratio) is already in the
+        # same per-element units: no nll_units rescale, exactly as distillation_nerc.
+        steerable_weight: 1.0
+        steerable_normalize: none       # REQUIRED with nll_reduction: mean (else raises)
+        steerable_height: 5             # +2 residuals -> SCFpyr height 7 -> 22 bands @512
+        steerable_order: 3              # nbands = order+1 = 4 orientations
+        steerable_match_mode: upsample  # student 256 -> 512; keeps all 22 bands alive
+        steerable_color_mode: luminance
+        steerable_complex: True
+        steerable_complex_metric: magnitude
+        steerable_eps: 1.0e-8
+        steerable_log_bands: True       # watch residual_highpass / band_0_*: they sit
+                                        # above the student's Nyquist and may stay pinned
+        # no band schedule: all 22 bands active from epoch 0 (graded weights below)
+        steerable_band_weights:         # graded diffweight ramp, level 0 = FINEST
+          "('residual_highpass',)": 0.10
+          "('band', 0, 0)": 0.12
+          "('band', 0, 1)": 0.12
+          "('band', 0, 2)": 0.12
+          "('band', 0, 3)": 0.12
+          "('band', 1, 0)": 0.18
+          "('band', 1, 1)": 0.18
+          "('band', 1, 2)": 0.18
+          "('band', 1, 3)": 0.18
+          "('band', 2, 0)": 0.27
+          "('band', 2, 1)": 0.27
+          "('band', 2, 2)": 0.27
+          "('band', 2, 3)": 0.27
+          "('band', 3, 0)": 0.60
+          "('band', 3, 1)": 0.60
+          "('band', 3, 2)": 0.60
+          "('band', 3, 3)": 0.60
+          "('band', 4, 0)": 1.50
+          "('band', 4, 1)": 1.50
+          "('band', 4, 2)": 1.50
+          "('band', 4, 3)": 1.50
+          "('residual_lowpass',)": 0.05
+
+    ddconfig:                           # ignored: the architecture comes from vae_repo.
+      double_z: True                    # Kept so the file reads like its 4-channel twin.
+      z_channels: 32
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [ 1,2,4,4 ]
+      num_res_blocks: 2
+      attn_resolutions: [ ]
+      dropout: 0.0
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 48
+    num_workers: 8                      # 8 x 2 ranks exactly fills -pe omp 16
+    wrap: True
+    train:
+      target: ldm_ftmse.data_squash.FileListSquashTeacherTrain
+      params:                           # NO CROP: one anisotropic Resize((256,256))
+        size: 256                       # of the full frame, matching the Resize((512,512))
+        degradation: pil_nearest        # the teachers were built with. degradation is inert.
+        images_list_file: /projectnb/ivc-ml/mvasu6/Perceptually-Better-VAE/ldm_official/filelists/split_0_1M_flux2/train.txt
+        teacher_dir: /projectnb/ivc-ml/mvasu6/LAION_FACE/teacher_recons_512_png_flux2
+        teacher_size: 512
+                                        # no latents_file: see the header
+    validation:
+      target: ldm_ftmse.data_squash.FileListSquashTeacherValidation
+      params:
+        size: 256
+        degradation: pil_nearest
+        images_list_file: /projectnb/ivc-ml/mvasu6/Perceptually-Better-VAE/ldm_official/filelists/split_0_1M_flux2/val.txt
+        teacher_dir: /projectnb/ivc-ml/mvasu6/LAION_FACE/teacher_recons_512_png_flux2
+        teacher_size: 512
+
+lightning:
+  modelcheckpoint:
+    params:
+      save_top_k: -1                    # keep EVERY epoch; val/rec_loss is a bad selector
+      every_n_train_steps: 5160         # = one epoch of optimiser steps -> each save is a
+                                        # full-epoch resume point (check is_last_batch)
+
+  logger:
+    target: pytorch_lightning.loggers.WandbLogger
+    params:
+      name: ldm_nmn_l1vgg1_str1_flux2_1M
+      project: vae-knowledge-distillation
+      group: ldm_1M
+      tags: ["ldm", "1M", "split_0", "flux2", "32ch", "no-gan", "nerc-match", "l1", "lpips1.0-vgg", "str1.0", "graded", "allbands", "bf16"]
+
+  callbacks:
+    cuda_callback:                      # logs perf/epoch_time_s + peak memory
+      target: ldm_ftmse.wandb_logging.CUDACallbackLogged
+
+    image_logger:
+      target: ldm_ftmse.wandb_logging.ImageLoggerWandb
+      params:
+        batch_frequency: 1000
+        max_images: 8
+        increase_log_steps: True
+
+  trainer:
+    benchmark: True
+    precision: bf16
+    accumulate_grad_batches: 2
+    max_epochs: 25

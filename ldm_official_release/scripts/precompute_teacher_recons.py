@@ -52,8 +52,14 @@ def main():
     ap.add_argument("--src_dir", required=True)
     ap.add_argument("--out_dir", required=True)
     ap.add_argument("--teacher", default="stabilityai/sd-vae-ft-mse",
-                    help="any diffusers AutoencoderKL repo or local directory")
+                    help="any diffusers VAE repo or local directory")
     ap.add_argument("--subfolder", default="")
+    ap.add_argument("--vae_class", default="AutoencoderKL",
+                    help="diffusers class to load the teacher with. AutoencoderKL covers "
+                         "sd-vae-ft-mse, SD-XL and SD-3.5; FLUX.2 needs AutoencoderKLFlux2, "
+                         "which exists only in diffusers >= 0.36 (see EXTRA_PYTHONPATH in "
+                         "scripts/env.sh). Any class with encode().latent_dist and "
+                         "decode().sample works -- the round trip below is unchanged.")
     ap.add_argument("--size", type=int, default=512)
     ap.add_argument("--batch_size", type=int, default=8)
     ap.add_argument("--num_workers", type=int, default=8)
@@ -66,7 +72,13 @@ def main():
     if not 0 <= a.shard_index < a.num_shards:
         raise SystemExit("--shard_index must be in [0, {})".format(a.num_shards))
 
-    from diffusers import AutoencoderKL
+    import diffusers
+    try:
+        VaeClass = getattr(diffusers, a.vae_class)
+    except AttributeError:
+        raise SystemExit("diffusers {} has no {} -- for FLUX.2 use the 0.36 overlay "
+                         "(scripts_rebuttal/install_diffusers036.sh)".format(
+                             diffusers.__version__, a.vae_class))
 
     paths = sorted(os.path.join(r, f) for r, _d, fs in os.walk(a.src_dir) for f in fs
                    if f.lower().endswith(IMAGE_EXTS) and os.path.getsize(os.path.join(r, f)) > 0)
@@ -88,7 +100,8 @@ def main():
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     kw = {"subfolder": a.subfolder} if a.subfolder else {}
-    vae = AutoencoderKL.from_pretrained(a.teacher, **kw).eval().to(dev)
+    vae = VaeClass.from_pretrained(a.teacher, **kw).eval().to(dev)
+    print("teacher: {} ({}) z={}".format(a.teacher, a.vae_class, vae.config.latent_channels), flush=True)
     use_amp = dev == "cuda" and not a.no_amp
 
     loader = DataLoader(_Images(todo, a.size), batch_size=a.batch_size, num_workers=a.num_workers)
@@ -111,7 +124,8 @@ def main():
     # describe the whole set, not this shard, so shard 0's copy is the right one.
     if a.shard_index == 0:
         with open(os.path.join(a.out_dir, "meta.json"), "w") as f:
-            json.dump({"teacher": a.teacher, "subfolder": a.subfolder, "src_dir": os.path.abspath(a.src_dir),
+            json.dump({"teacher": a.teacher, "subfolder": a.subfolder, "vae_class": a.vae_class,
+                       "src_dir": os.path.abspath(a.src_dir),
                        "size": a.size, "latent_mode": "mean", "amp": use_amp, "n": len(paths)}, f, indent=2)
     print("done -> {}".format(a.out_dir))
 
