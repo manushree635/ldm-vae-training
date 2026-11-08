@@ -1,23 +1,45 @@
-# GT-512 twin of pretune_1M_t512.yaml: the 512 target is the ORIGINAL image squashed to
-# 512x512, not the teacher VAE's reconstruction of it. Same substitution pretune_1M_gt256.yaml
-# makes at 256, via data_squash(teacher_from_source=True), which builds the target on the fly
-# from the frame already decoded for the student -- no teacher PNG is read.
+# L1 + LPIPS against GT at 512, and NOTHING else.
 #
-#   total loss = 1.0*L1(S,GT@256) + 1.0*LPIPS(S,GT@256)
-#              + 1.0*mean|up(S) - GT@512| + 1.0*LPIPS-VGG(GT@512, up(S))
+# pretune_1M with the steerable pyramid replaced by L1 + LPIPS at 512 -- and with BOTH 256 terms
+# switched off, so the 512 terms are the whole loss. The 512 target is the ORIGINAL image squashed
+# to 512x512, not the teacher VAE's reconstruction of it: the same substitution
+# pretune_1M_gt256.yaml makes at 256, via data_squash(teacher_from_source=True), which builds the
+# target on the fly from the frame already decoded for the student -- no teacher PNG is read.
 #
-# CHANGED from pretune_1M_t512.yaml, in the train AND validation blocks, nothing else:
-#   teacher_dir         teacher_recons_512_png -> split_0   (the source images)
-#   teacher_from_source  (new) True
+#   total loss = 1.0*mean|up(S) - GT@512| + 1.0*LPIPS-VGG(GT@512, up(S))     and NOTHING else
 #
-# WHAT TO EXPECT. This makes the 512 terms a GT reconstruction loss at a resolution the student
-# cannot reach: a 4x32x32 latent decoded to 256 and bicubic-upsampled to 512 cannot carry GT's
-# fine detail, and unlike a teacher recon the GT does not omit it either, so both 512 terms keep
-# an irreducible floor. The specific risk for L1 is that an unreachable target makes the
-# L1-optimal output the conditional MEDIAN, i.e. deliberately smooth -- so watch t512_l1 and
-# watch for the student going blurrier rather than sharper. Measured on the val set, GT and
-# teacher recon differ by only ~2-4/255 mean, so this is a small change in the target and a
-# large change in what the target MEANS.
+# CHANGED from pretune_1M:
+#   loss target        -> ldm_ftmse.losses_teacher512.LPIPSWithDiscriminatorTeacher512
+#   steerable_weight   1.0 -> 0.0        (the steerable_band_weights block below is inert at 0)
+#   pixelloss_weight   1.0 -> 0.0        no L1 at 256
+#   perceptual_weight  1.0 -> 0.0        no LPIPS at 256
+#   teacher_dir        teacher_recons_512_png -> split_0, + teacher_from_source: True
+#                                        (train AND validation blocks)
+#   + teacher512_l1_weight / teacher512_perceptual_weight
+#
+# The 256 branch collapses EXACTLY, not approximately: rec_loss = pixel_weight*|diff| = 0, and
+# logvar is not in the optimiser (autoencoder_nogan.py trains decoder + post_quant_conv only), so
+# it stays at its init 0.0 and nll = 0/exp(0) + 0 = 0. kl_weight is already 0 and disc_factor 0.
+# Verified on CPU: total == t512_l1 + t512_lpips to 1e-6, decoder gradient finite and non-zero.
+#
+# TWO TRAPS if you edit this. (1) pixelloss_weight is honoured only by
+# ldm_ftmse/losses_steerable.py:435 -- upstream contperceptual.py:48 never multiplies by it, so
+# setting it to 0 is a silent no-op under upstream's own loss class. (2) perceptual_weight: 0 does
+# NOT disarm the 512 LPIPS: self.perceptual_loss is built unconditionally (contperceptual.py:17)
+# and the 512 term uses it, so perceptual_net must stay set.
+#
+# MONITORING: val/rec_loss is identically 0.0 here, so the ModelCheckpoint monitor and any
+# val_rec_loss column carry no signal. Read train/t512_l1, train/t512_lpips and aeloss instead;
+# save_top_k is -1, so every epoch is kept regardless.
+#
+# WHAT TO EXPECT. The student is supervised ONLY at 512, through the fixed bicubic 256->512
+# upsample, against a target it cannot reach: a 4x32x32 latent decoded to 256 cannot carry GT's
+# fine detail, and unlike a teacher recon the GT does not omit it either, so both terms keep an
+# irreducible floor. With L1 that floor biases the output toward the conditional MEDIAN, i.e.
+# deliberately smooth, and there is no 256 anchor to hold it. Expect blur before detail; watch
+# train/t512_l1 against pretune_1M_t512.yaml's trajectory. Measured on the val set, GT and teacher
+# recon differ by only ~2-4/255 mean, so this is a small change in the target and a large change
+# in what the target MEANS.
 
 model:
   base_learning_rate: 1.0e-5            # nerc training_config.learning_rate (unscaled)
@@ -39,8 +61,8 @@ model:
         disc_factor: 0.0                # NO GAN (the model class enforces this)
         # --- nerc-style reconstruction: 1 x MSE + 0.1 x LPIPS, MEAN-reduced -------
         pixel_loss: l1                  # L1, upstream's pixel term
-        pixelloss_weight: 1.0
-        perceptual_weight: 1.0
+        pixelloss_weight: 0.0            # OFF -- no L1 at 256
+        perceptual_weight: 0.0           # OFF -- no LPIPS at 256 (its VGG forward is skipped)
         perceptual_net: vgg
         nll_reduction: mean             # mean over C*H*W, not upstream's per-image sum
         # --- steerable distillation, the only new term ---------------------------
@@ -134,10 +156,10 @@ lightning:
   logger:
     target: pytorch_lightning.loggers.WandbLogger
     params:
-      name: ldm_nmn_l1vgg1_str1_1M_h200
+      name: ldm_nmn_gt512_1M_h200
       project: vae-knowledge-distillation
       group: ldm_1M
-      tags: ["ldm", "1M", "split_0", "no-gan", "nerc-match", "l1", "lpips1.0-vgg", "str1.0", "graded", "allbands", "h200", "bf16"]
+      tags: ["ldm", "1M", "split_0", "no-gan", "nerc-match", "l1", "lpips1.0-vgg", "str0", "gt512", "gt-target", "h200", "bf16"]
 
   callbacks:
     cuda_callback:                      # logs perf/epoch_time_s + peak memory

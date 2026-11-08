@@ -128,10 +128,10 @@ lightning:
   logger:
     target: pytorch_lightning.loggers.WandbLogger
     params:
-      name: ldm_nmn_l1vgg1_str1_1M_h200
+      name: ldm_nmn_t512_1M_h200
       project: vae-knowledge-distillation
       group: ldm_1M
-      tags: ["ldm", "1M", "split_0", "no-gan", "nerc-match", "l1", "lpips1.0-vgg", "str1.0", "graded", "allbands", "h200", "bf16"]
+      tags: ["ldm", "1M", "split_0", "no-gan", "nerc-match", "l1", "lpips1.0-vgg", "str0", "t512", "teacher512", "h200", "bf16"]
 
   callbacks:
     cuda_callback:                      # logs perf/epoch_time_s + peak memory
