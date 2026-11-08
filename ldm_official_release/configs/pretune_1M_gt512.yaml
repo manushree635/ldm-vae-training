@@ -159,7 +159,7 @@ lightning:
       name: ldm_nmn_gt512_1M_h200
       project: vae-knowledge-distillation
       group: ldm_1M
-      tags: ["ldm", "1M", "split_0", "no-gan", "nerc-match", "l1", "lpips1.0-vgg", "str0", "gt512", "gt-target", "h200", "bf16"]
+      tags: ["ldm", "1M", "split_0", "no-gan", "nerc-match", "l1", "lpips1.0-vgg", "str0", "gt512", "gt-target", "no-256-terms", "h200", "bf16"]
 
   callbacks:
     cuda_callback:                      # logs perf/epoch_time_s + peak memory

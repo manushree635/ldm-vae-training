@@ -1,8 +1,9 @@
 #!/bin/bash -l
-# Train the t512 arm: the steerable pyramid is replaced by L1 + LPIPS against the SAME 512
-# teacher reconstruction, through the same bicubic 256->512 upsample. So it differs from
-# pretune_1M only in the 512 representation -- pixels and LPIPS instead of pyramid bands.
-# Watch train/t512_l1, train/t512_lpips, train/t512_term, train/t512_share.
+# Train the t512 arm: L1 + LPIPS against the 512 TEACHER RECONSTRUCTION and NOTHING else --
+# both 256 terms are off. Same as run_gt512.sh but the 512 target is the teacher VAE's own
+# recon, not GT, so the student has no ground truth at any resolution and this is pure
+# distillation through the fixed bicubic 256->512 upsample. val/rec_loss is identically 0
+# here: read train/t512_l1, train/t512_lpips and aeloss instead.
 #
 #   bash scripts_rebuttal/run_t512.sh                 # on a machine with 2 GPUs
 #   SMOKE=1 bash scripts_rebuttal/run_t512.sh         # 12 steps first, ~5 min

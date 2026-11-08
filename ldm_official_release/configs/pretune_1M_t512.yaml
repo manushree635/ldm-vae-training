@@ -1,19 +1,47 @@
-# pretune_1M with the steerable pyramid replaced by L1 + LPIPS against the same 512 teacher
-# reconstruction. The pyramid compared student and teacher band by band; this compares them in
-# PIXELS and LPIPS, through the same bicubic 256->512 upsample, so the arm differs from
-# pretune_1M only in the 512 REPRESENTATION.
+# L1 + LPIPS against the 512 TEACHER RECONSTRUCTION, and NOTHING else.
 #
-#   total loss = 1.0*L1(S,GT@256) + 1.0*LPIPS(S,GT@256)
-#              + 1.0*mean|up(S) - T@512| + 1.0*LPIPS-VGG(T@512, up(S))
+# pretune_1M_gt512.yaml with ONE thing changed -- the 512 target -- in the train AND validation
+# blocks:
 #
-# CHANGED from pretune_1M, nothing else:
-#   loss target       -> ldm_ftmse.losses_teacher512.LPIPSWithDiscriminatorTeacher512
-#   steerable_weight  1.0 -> 0.0   (the steerable_band_weights block below is inert at 0)
+#   teacher_dir  split_0 + teacher_from_source: True   ->   teacher_recons_512_png
+#                (GT: the source frame squashed to 512)      (the teacher VAE's own 512 recon)
+#
+# Both 256 weights stay off, so the 512 terms remain the whole loss. This is the exact release
+# twin of the research arm queued as job 8522237
+# (ldm_official/configs/autoencoder_kl_32x32x4_nercmatch_t512only_1M_h200.yaml).
+#
+#   total loss = 1.0*mean|up(S) - T@512| + 1.0*LPIPS-VGG(T@512, up(S))     and NOTHING else
+#
+# The pair is the point: gt512 and this file differ ONLY in what the 512 target is, so together
+# they separate "supervise at 512" from "supervise against ground truth".
+#
+# CHANGED from pretune_1M:
+#   loss target        -> ldm_ftmse.losses_teacher512.LPIPSWithDiscriminatorTeacher512
+#   steerable_weight   1.0 -> 0.0        (the steerable_band_weights block below is inert at 0)
+#   pixelloss_weight   1.0 -> 0.0        no L1 at 256
+#   perceptual_weight  1.0 -> 0.0        no LPIPS at 256
 #   + teacher512_l1_weight / teacher512_perceptual_weight
 #
-# Logged: train/t512_l1, train/t512_lpips, train/t512_term, train/t512_share.
-# The teacher512 terms are MEAN-reduced, so nll_reduction MUST stay "mean" and
-# steerable_normalize "none" -- the class raises otherwise.
+# The 256 branch collapses EXACTLY, not approximately: rec_loss = pixel_weight*|diff| = 0, and
+# logvar is not in the optimiser (autoencoder_nogan.py trains decoder + post_quant_conv only), so
+# it stays at its init 0.0 and nll = 0/exp(0) + 0 = 0. kl_weight is already 0 and disc_factor 0.
+# Verified on CPU: total == t512_l1 + t512_lpips to 1e-6, decoder gradient finite and non-zero.
+#
+# TWO TRAPS if you edit this. (1) pixelloss_weight is honoured only by
+# ldm_ftmse/losses_steerable.py:435 -- upstream contperceptual.py:48 never multiplies by it, so
+# setting it to 0 is a silent no-op under upstream's own loss class. (2) perceptual_weight: 0 does
+# NOT disarm the 512 LPIPS: self.perceptual_loss is built unconditionally (contperceptual.py:17)
+# and the 512 term uses it, so perceptual_net must stay set.
+#
+# MONITORING: val/rec_loss is identically 0.0 here, so the ModelCheckpoint monitor and any
+# val_rec_loss column carry no signal. Read train/t512_l1, train/t512_lpips and aeloss instead;
+# save_top_k is -1, so every epoch is kept regardless.
+#
+# WHAT TO EXPECT. Unlike gt512 this target is reachable -- it is another VAE's output, above the
+# student's own resolution but not beyond its reach -- yet the student now has NO ground truth at
+# any resolution, so this is pure distillation through the fixed bicubic 256->512 upsample and the
+# teacher's own errors become the target. Measured on the val set, GT and teacher recon differ by
+# only ~2-4/255 mean: the two arms' targets are numerically close and conceptually opposite.
 
 model:
   base_learning_rate: 1.0e-5            # nerc training_config.learning_rate (unscaled)
@@ -35,8 +63,8 @@ model:
         disc_factor: 0.0                # NO GAN (the model class enforces this)
         # --- nerc-style reconstruction: 1 x MSE + 0.1 x LPIPS, MEAN-reduced -------
         pixel_loss: l1                  # L1, upstream's pixel term
-        pixelloss_weight: 1.0
-        perceptual_weight: 1.0
+        pixelloss_weight: 0.0            # OFF -- no L1 at 256
+        perceptual_weight: 0.0           # OFF -- no LPIPS at 256 (its VGG forward is skipped)
         perceptual_net: vgg
         nll_reduction: mean             # mean over C*H*W, not upstream's per-image sum
         # --- steerable distillation, the only new term ---------------------------
@@ -131,7 +159,7 @@ lightning:
       name: ldm_nmn_t512_1M_h200
       project: vae-knowledge-distillation
       group: ldm_1M
-      tags: ["ldm", "1M", "split_0", "no-gan", "nerc-match", "l1", "lpips1.0-vgg", "str0", "t512", "teacher512", "h200", "bf16"]
+      tags: ["ldm", "1M", "split_0", "no-gan", "nerc-match", "l1", "lpips1.0-vgg", "str0", "t512", "teacher512", "no-256-terms", "h200", "bf16"]
 
   callbacks:
     cuda_callback:                      # logs perf/epoch_time_s + peak memory
